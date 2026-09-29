@@ -823,7 +823,7 @@ iperf_udp_accept(struct iperf_test *test)
 
     /* Let the client know we're ready "accept" another UDP "stream" */
     buf = UDP_CONNECT_REPLY;
-    if (write(s, &buf, sizeof(buf)) < 0) {
+    if (send(s, (char *) &buf, sizeof(buf), 0) < 0) {   /* send(): sockets on all platforms */
         i_errno = IESTREAMWRITE;
         return -1;
     }
@@ -974,7 +974,7 @@ iperf_udp_connect(struct iperf_test *test)
     if (test->debug) {
         printf("Sending Connect message to Socket %d\n", s);
     }
-    if (write(s, &buf, sizeof(buf)) < 0) {
+    if (send(s, (char *) &buf, sizeof(buf), 0) < 0) {   /* send(): sockets on all platforms */
         // XXX: Should this be changed to IESTREAMCONNECT?
         i_errno = IESTREAMWRITE;
         return -1;

@@ -1,0 +1,155 @@
+name: Release binaries
+
+# Builds statically-linked iperf-latency binaries for linux x86_64/aarch64 and
+# (best effort) windows x86_64, and attaches them to the GitHub release that
+# triggered the run. workflow_dispatch exists to test the build steps without
+# cutting a release (it can't attach assets to a release).
+
+permissions:
+  contents: write
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+
+jobs:
+  build-linux:
+    name: linux ${{ matrix.arch }} (musl static)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get -y update
+          sudo apt-get install -y musl-tools file
+
+      - name: Configure (musl, static, no OpenSSL)
+        run: |
+          CC=musl-gcc CFLAGS="-O2 -static" LDFLAGS="-static" \
+            ./configure --with-openssl=no --enable-static-bin
+
+      - name: Build
+        run: |
+          make -j"$(nproc)"
+          file src/iperf-latency
+          file src/iperf-latency | grep -Eqi 'statically linked|static-pie' || {
+            echo "ERROR: src/iperf-latency is not a static binary" >&2
+            exit 1
+          }
+
+      # Runs the real end-to-end latency path on native hardware and fails the
+      # job on absurd values (the clock-domain bug produced ~1e8 ms constants).
+      - name: Smoke test (localhost UDP --measure-latency)
+        run: |
+          ./src/iperf-latency --version
+          ./src/iperf-latency -s -1 >/tmp/server.log 2>&1 &
+          sleep 1
+          ./src/iperf-latency -c 127.0.0.1 -u -t 4 --measure-latency | tee /tmp/client.log
+          grep -q 'PACKET LATENCY' /tmp/client.log
+          min_ms=$(awk '/^Minimum:/{print $2}' /tmp/client.log | head -1)
+          awk -v v="${min_ms:-1e9}" 'BEGIN { if (v <= 0 || v >= 1000) exit 1 }'
+
+      - name: Stage artifact
+        run: cp src/iperf-latency "iperf-latency-linux-${{ matrix.arch }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iperf-latency-linux-${{ matrix.arch }}
+          path: iperf-latency-linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  # Best effort: the current source still needs WIN32 branches for post-3.21
+  # features (GSO/GRO, tcp_info, pacing, signals) — see BUILD-NOTES.md,
+  # "Windows — not built, why not". Until those land, this job is expected to
+  # fail; continue-on-error keeps the release going with the Linux binaries
+  # and the workflow will attach a windows exe automatically once the source
+  # builds.
+  build-windows:
+    name: windows x86_64 (mingw, best effort)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get -y update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+
+      - name: Configure (mingw cross)
+        run: |
+          CC=x86_64-w64-mingw32-gcc ./configure \
+            --host=x86_64-w64-mingw32 \
+            --with-openssl=no \
+            LIBS='-lws2_32 -lwinpthread' \
+            LDFLAGS='-static'
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Stage artifact (if a binary was produced)
+        run: |
+          if [ -f src/iperf-latency.exe ]; then
+            x86_64-w64-mingw32-strip src/iperf-latency.exe
+            cp src/iperf-latency.exe iperf-latency-windows-x86_64.exe
+          else
+            echo "No windows binary produced; see BUILD-NOTES.md ('Windows — not built, why not')." | tee windows-build-missing.txt
+          fi
+
+      - name: Upload build artifact
+        if: ${{ hashFiles('iperf-latency-windows-x86_64.exe') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: iperf-latency-windows-x86_64
+          path: iperf-latency-windows-x86_64.exe
+          if-no-files-found: error
+
+  release-upload:
+    name: Attach binaries to the release
+    needs: [build-linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: iperf-latency-linux-*
+          merge-multiple: true
+          path: dist
+
+      - name: Download windows artifact (optional)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: iperf-latency-windows-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksum and attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          chmod +x iperf-latency-* || true
+          sha256sum iperf-latency-linux-* > SHA256SUMS
+          cat SHA256SUMS
+          if [ -f iperf-latency-windows-x86_64.exe ]; then
+            sha256sum iperf-latency-windows-x86_64.exe >> SHA256SUMS
+          fi
+          gh release upload "$RELEASE_TAG" iperf-latency-* SHA256SUMS \
+            --clobber --repo "$GITHUB_REPOSITORY"

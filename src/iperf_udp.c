@@ -839,6 +839,25 @@ iperf_udp_accept(struct iperf_test *test)
  * there is no listen(2) for UDP.  This socket will however accept
  * a UDP datagram from a client (indicating the client's presence).
  */
+#ifdef _WIN32
+/* Windows: after a datagram hits an unreachable/closed UDP port, winsock
+ * fails every subsequent call on that socket with WSAECONNRESET (the
+ * "connected UDP reset" behavior).  POSIX sockets do not do this and the
+ * accept-probe dance of the iperf UDP protocol trips it easily, so switch
+ * it off for iperf's UDP sockets. */
+#include <mstcpip.h>
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+static void
+win_disable_udp_connreset(int s)
+{
+    BOOL off = FALSE;
+    DWORD bytes = 0;
+    (void) WSAIoctl((SOCKET) s, SIO_UDP_CONNRESET, &off, sizeof(off),
+                     NULL, 0, &bytes, NULL, NULL);
+}
+#endif /* _WIN32 */
 int
 iperf_udp_listen(struct iperf_test *test)
 {
@@ -877,6 +896,10 @@ iperf_udp_connect(struct iperf_test *test)
         i_errno = IESTREAMCONNECT;
         return -1;
     }
+
+#ifdef _WIN32
+    win_disable_udp_connreset(s);
+#endif
 
     /* Check and set socket buffer sizes */
     rc = iperf_udp_buffercheck(test, s);

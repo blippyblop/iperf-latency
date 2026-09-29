@@ -459,6 +459,7 @@ Nrecv(int fd, char *buf, size_t count, int prot, int sock_opt)
         FD_SET(fd, &rfdset);
         r = select(fd + 1, &rfdset, NULL, NULL, &timeout);
         if (r < 0) {
+            errno = SOCK_ERRNO;   /* truthful message on Windows */
             return NET_HARDERROR;
         }
         if (r == 0) {
@@ -477,6 +478,7 @@ Nrecv(int fd, char *buf, size_t count, int prot, int sock_opt)
             if (SOCK_ERRNO == EINTR || SOCK_ERRNO == EAGAIN || SOCK_ERRNO == EWOULDBLOCK)
                 break;
             else
+                errno = SOCK_ERRNO;   /* truthful message on Windows */
                 return NET_HARDERROR;
         } else if (r == 0)
             break;
@@ -517,6 +519,7 @@ Nrecv(int fd, char *buf, size_t count, int prot, int sock_opt)
             FD_SET(fd, &rfdset);
             r = select(fd + 1, &rfdset, NULL, NULL, &timeout);
             if (r < 0) {
+                errno = SOCK_ERRNO;   /* truthful message on Windows */
                 return NET_HARDERROR;
             }
             if (r == 0) {
@@ -556,6 +559,7 @@ Nrecv_no_select(int fd, char *buf, size_t count, int prot, int sock_opt)
             if (SOCK_ERRNO == EINTR || SOCK_ERRNO == EAGAIN || SOCK_ERRNO == EWOULDBLOCK)
                 break;
             else
+                errno = SOCK_ERRNO;   /* truthful message on Windows */
                 return NET_HARDERROR;
         } else if (r == 0)
             break;
@@ -629,6 +633,7 @@ Nread_gro(int fd, char *buf, size_t count, int prot, int *dgram_sz)
 
 	/* Input validation */
 	if (!buf || count <= 0 || !dgram_sz) {
+		errno = SOCK_ERRNO;   /* truthful message on Windows */
 		return NET_HARDERROR;
 	}
 
@@ -643,6 +648,7 @@ Nread_gro(int fd, char *buf, size_t count, int prot, int *dgram_sz)
 		if (SOCK_ERRNO == EINTR || SOCK_ERRNO == EAGAIN || SOCK_ERRNO == EWOULDBLOCK) {
 			return 0;
 		} else {
+			errno = SOCK_ERRNO;   /* truthful message on Windows */
 			return NET_HARDERROR;
 		}
 	}
@@ -660,6 +666,7 @@ int
 Nread_gro(int fd, char *buf, size_t count, int prot, int *dgram_sz)
 {
 	/* GRO not supported on this platform */
+	errno = SOCK_ERRNO;   /* truthful message on Windows */
 	return NET_HARDERROR;
 }
 #endif /* HAVE_UDP_GRO */
@@ -692,6 +699,7 @@ Nwrite(int fd, const char *buf, size_t count, int prot)
                 return NET_SOFTERROR;
 
                 default:
+		errno = SOCK_ERRNO;   /* truthful message on Windows */
 		return NET_HARDERROR;
 	    }
 	} else if (r == 0)
@@ -763,6 +771,7 @@ Nwrite_gso(int fd, const char *buf, size_t count, int prot, uint16_t gso_size)
 				return NET_SOFTERROR;
 
 			default:
+				errno = SOCK_ERRNO;   /* truthful message on Windows */
 				return NET_HARDERROR;
 		}
 	}
@@ -773,6 +782,7 @@ int
 Nwrite_gso(int fd, const char *buf, size_t count, int prot, uint16_t gso_size)
 {
 	/* GSO not supported on this platform */
+	errno = SOCK_ERRNO;   /* truthful message on Windows */
 	return NET_HARDERROR;
 }
 #endif /* HAVE_UDP_SEGMENT */
@@ -840,6 +850,7 @@ Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
 		return NET_SOFTERROR;
 
 		default:
+		errno = SOCK_ERRNO;   /* truthful message on Windows */
 		return NET_HARDERROR;
 	    }
 	}
@@ -851,6 +862,7 @@ Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
     return count;
 #else /* HAVE_SENDFILE */
     errno = ENOSYS;	/* error if somehow get called without HAVE_SENDFILE */
+    errno = SOCK_ERRNO;   /* truthful message on Windows */
     return NET_HARDERROR;
 #endif /* HAVE_SENDFILE */
 }

@@ -106,10 +106,12 @@ jobs:
         run: |
           make -j"$(nproc)"
           file src/iperf-latency.exe
-          file src/iperf-latency.exe | grep -Eqi 'statically linked|static-pie' || {
-            echo "ERROR: src/iperf-latency.exe is not a static binary" >&2
+          # "static" on Windows = no non-system DLL dependencies (ws2_32 and
+          # kernel32 are Windows system DLLs and always import-linked).
+          if objdump -p src/iperf-latency.exe | grep -iE "DLL Name: *(libgcc|libwinpthread|libstdc|msys-)"; then
+            echo "ERROR: src/iperf-latency.exe depends on non-system DLLs" >&2
             exit 1
-          }
+          fi
 
       # Runs the real end-to-end latency path on actual Windows and fails the
       # job on absurd values (the clock-domain bug produced ~1e8 ms constants).

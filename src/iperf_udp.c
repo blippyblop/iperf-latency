@@ -67,15 +67,15 @@
  * thread, so access is protected by a mutex.
  */
 static int
-latency_float_cmp(const void *a, const void *b)
+latency_double_cmp(const void *a, const void *b)
 {
-    float fa = *(const float *) a;
-    float fb = *(const float *) b;
+    double fa = *(const double *) a;
+    double fb = *(const double *) b;
     return (fa > fb) - (fa < fb);
 }
 
 static void
-latency_percentile(const float *sorted, size_t n, double p, double *out)
+latency_percentile(const double *sorted, size_t n, double p, double *out)
 {
     double rank;
     size_t lo, hi;
@@ -91,10 +91,10 @@ latency_percentile(const float *sorted, size_t n, double p, double *out)
 }
 
 static void
-latency_compute_stats(const float *samples, size_t n, struct iperf_latency_stats *out)
+latency_compute_stats(const double *samples, size_t n, struct iperf_latency_stats *out)
 {
     size_t i;
-    float *sorted;
+    double *sorted;
     double sum, sumsq;
 
     out->count = (int64_t) n;
@@ -124,10 +124,10 @@ latency_compute_stats(const float *samples, size_t n, struct iperf_latency_stats
         out->stdev = sqrt(v > 0.0 ? v : 0.0);
     }
 
-    sorted = (float *) malloc(n * sizeof(float));
+    sorted = (double *) malloc(n * sizeof(double));
     if (sorted != NULL) {
-        memcpy(sorted, samples, n * sizeof(float));
-        qsort(sorted, n, sizeof(float), latency_float_cmp);
+        memcpy(sorted, samples, n * sizeof(double));
+        qsort(sorted, n, sizeof(double), latency_double_cmp);
         latency_percentile(sorted, n, 0.50, &out->median);
         latency_percentile(sorted, n, 0.95, &out->p95);
         latency_percentile(sorted, n, 0.99, &out->p99);
@@ -151,8 +151,8 @@ iperf_latency_new(void)
     }
     lat->interval_cap = IPERF_LATENCY_SAMPLES_INIT;
     lat->total_cap = IPERF_LATENCY_SAMPLES_INIT;
-    lat->interval_samples = (float *) malloc(lat->interval_cap * sizeof(float));
-    lat->total_samples = (float *) malloc(lat->total_cap * sizeof(float));
+    lat->interval_samples = (double *) malloc(lat->interval_cap * sizeof(double));
+    lat->total_samples = (double *) malloc(lat->total_cap * sizeof(double));
     if (lat->interval_samples == NULL || lat->total_samples == NULL) {
         free(lat->interval_samples);
         free(lat->total_samples);
@@ -175,17 +175,17 @@ iperf_latency_free(struct iperf_latency *lat)
 }
 
 static void
-latency_append(float **samples, size_t *count, size_t *cap, double value)
+latency_append(double **samples, size_t *count, size_t *cap, double value)
 {
     if (*count >= *cap) {
         size_t newcap = *cap * 2;
-        float *ns = (float *) realloc(*samples, newcap * sizeof(float));
+        double *ns = (double *) realloc(*samples, newcap * sizeof(double));
         if (ns == NULL)
             return; /* drop the sample on out of memory */
         *samples = ns;
         *cap = newcap;
     }
-    (*samples)[(*count)++] = (float) value;
+    (*samples)[(*count)++] = value;
 }
 
 void
@@ -407,11 +407,24 @@ sp->prev_transit = transit;
  	     * packet, removing the clock offset obtained from the
  	     * control-channel synchronization.  Skip samples during the
  	     * omit period.
+ 	     *
+ 	     * The transit time MUST be computed as a signed difference:
+ 	     * the sender and receiver stamps come from different
+ 	     * CLOCK_MONOTONIC domains (seconds since each host's boot), so
+ 	     * the raw difference can legitimately be negative.  Do NOT use
+ 	     * the clamped `transit` from iperf_time_diff() above: it
+ 	     * returns the absolute value, which silently flipped the sign
+ 	     * whenever the receiver's clock domain was behind the sender's
+ 	     * (e.g. host rebooted more recently), producing a huge constant
+ 	     * latency roughly equal to the difference of the two uptimes
+ 	     * (doubled after offset removal).
  	     */
-if (sp->latency != NULL &&
+ 	    if (sp->latency != NULL &&
 	        test->clock_sync != NULL && test->clock_sync->valid &&
 	        !test->omitting) {
-	        double latency_ms = (transit - test->clock_sync->offset) * 1000.0;
+	        int64_t lat_us = ((int64_t) arrival_time.secs - (int64_t) sent_time.secs) * 1000000LL
+	                       + ((int64_t) arrival_time.usecs - (int64_t) sent_time.usecs);
+	        double latency_ms = (lat_us / 1e6 - test->clock_sync->offset) * 1000.0;
 	        iperf_latency_record(sp->latency, latency_ms);
 	    }
 

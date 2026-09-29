@@ -192,10 +192,13 @@ struct iperf_latency_stats
 struct iperf_latency
 {
     pthread_mutex_t lock;
-    float  *interval_samples;
+    /* double, not float: samples must keep sub-ms precision even if a
+     * bug ever puts huge (~1e8) values in them, where float quantizes
+     * to ~32 ms steps and corrupts the stdev computation. */
+    double *interval_samples;
     size_t  interval_count;
     size_t  interval_cap;
-    float  *total_samples;
+    double *total_samples;
     size_t  total_count;
     size_t  total_cap;
 };

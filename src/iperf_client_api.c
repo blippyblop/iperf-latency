@@ -304,6 +304,7 @@ iperf_handle_message_client(struct iperf_test *test)
 {
     int rval;
     int32_t err;
+    signed char state_byte;
 
     if (NULL == test)
     {
@@ -317,7 +318,7 @@ iperf_handle_message_client(struct iperf_test *test)
     }
 
     /*!!! Why is this read() and not Nread()? */
-    if ((rval = read(test->ctrl_sck, (char*) &test->state, sizeof(signed char))) <= 0) {
+    if ((rval = read(test->ctrl_sck, (char*) &state_byte, sizeof(signed char))) <= 0) {
         if (rval == 0) {
             i_errno = IECTRLCLOSE;
             return -1;
@@ -326,6 +327,15 @@ iperf_handle_message_client(struct iperf_test *test)
             return -1;
         }
     }
+
+    /* --measure-latency: a clock-sync reply is not a state change. */
+    if (state_byte == CLOCK_SYNC_RSP) {
+        if (iperf_clock_sync_handle_response(test) < 0)
+            return -1;
+        return 0;
+    }
+
+    test->state = state_byte;
 
     if (test->debug_level >= DEBUG_LEVEL_INFO) {
         iperf_printf(test, "State change: client received and changed State to %d-%s\n", test->state, state_to_text(test->state));
@@ -765,6 +775,9 @@ iperf_run_client(struct iperf_test * test)
             /* Run the timers. */
             iperf_time_now(&now);
             tmr_run(&now);
+
+            /* --measure-latency: send a ~1 Hz clock-sync request. */
+            iperf_clock_sync_client_tick(test);
 
 	    /*
 	     * Is the test done yet?  We have to be out of omitting

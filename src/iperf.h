@@ -106,6 +106,14 @@ struct iperf_interval_results
     double    jitter;
     int64_t   outoforder_packets;
     int64_t   cnt_error;
+    int64_t   latency_count;
+    double    latency_min;
+    double    latency_max;
+    double    latency_mean;
+    double    latency_median;
+    double    latency_p95;
+    double    latency_p99;
+    double    latency_stdev;
 
     int omitted;
 #if (defined(linux) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)) && \
@@ -157,6 +165,73 @@ struct iperf_stream_result
 };
 
 #define COOKIE_SIZE 37		/* size of an ascii uuid */
+
+/*
+ * --measure-latency support.
+ *
+ * Latency samples (end-to-end UDP packet latency in ms, as measured on the
+ * receiving side using the clock offset obtained from NTP-style
+ * synchronization over the TCP control channel) are kept per stream in
+ * struct iperf_latency, in a thread-safe sample buffer.
+ */
+struct iperf_latency_stats
+{
+    int64_t   count;
+    double    min;
+    double    max;
+    double    mean;
+    double    median;
+    double    p95;
+    double    p99;
+    double    stdev;
+};
+
+#define IPERF_LATENCY_RING_CAP 512      /* max clock-sync samples to keep for quality stats */
+#define IPERF_LATENCY_SAMPLES_INIT 4096 /* initial sample buffer size */
+
+struct iperf_latency
+{
+    pthread_mutex_t lock;
+    float  *interval_samples;
+    size_t  interval_count;
+    size_t  interval_cap;
+    float  *total_samples;
+    size_t  total_count;
+    size_t  total_cap;
+};
+
+/*
+ * NTP-style 4-timestamp clock synchronization over the TCP control channel.
+ * The client sends CLOCK_SYNC_REQ (T1, plus the T4 of the previous exchange);
+ * the server replies CLOCK_SYNC_RSP (T2, T3).
+ *
+ * Offset convention: clock_offset = own clock - peer clock (seconds).
+ * Client:  ((T4 - T3) - (T2 - T1)) / 2
+ * Server:  ((T2 - T1) + (T3 - T4)) / 2   (completed when the next T4 arrives)
+ */
+struct iperf_clock_sync
+{
+    int     enabled;         /* feature is active (UDP + --measure-latency) */
+    int     valid;           /* at least one sync sample has been recorded */
+    double  offset;          /* own clock - peer clock, seconds (of best sample) */
+    double  min_rtt;         /* minimum sync exchange RTT, seconds */
+    double  offset_stdev;    /* stdev of offsets of samples with rtt <= 2*min_rtt, seconds */
+    int     samples;         /* total number of completed sync samples */
+    int     errors;          /* sync exchanges that failed or timed out */
+    int     outstanding;     /* a CLOCK_SYNC_REQ is in flight (client only) */
+    struct iperf_time last_request;
+    /* timestamps, in microseconds of iperf_time */
+    uint64_t t1;             /* client: T1 of last request; server: T1 of pending exchange */
+    uint64_t t2;             /* server: T2 of pending exchange */
+    uint64_t t3;             /* server: T3 of pending exchange */
+    uint64_t t4;             /* client: T4 recorded on last response (piggybacked in next request) */
+    int     pending;         /* server: an exchange is awaiting its T4 */
+    double *ring_offset;     /* ring buffer of sample offsets (seconds) */
+    double *ring_rtt;        /* ring buffer of sample RTTs (seconds) */
+    size_t  ring_count;
+    size_t  ring_idx;
+};
+
 struct iperf_settings
 {
     int       domain;               /* AF_INET or AF_INET6 */
@@ -199,6 +274,7 @@ struct iperf_settings
     int       gso_bf_size;
     int       gro;
     int       gro_bf_size;
+    int       measure_latency;      /* --measure-latency: measure end-to-end latency of UDP packets */
 };
 
 struct iperf_test;
@@ -246,6 +322,11 @@ struct iperf_stream
     int64_t   cnt_error;
     int64_t   omitted_cnt_error;
     uint64_t  target;
+
+    /* --measure-latency (receiver side only) */
+    struct iperf_latency *latency;
+    struct iperf_latency_stats latency_peer; /* whole-test latency stats, from the peer */
+    int      latency_peer_valid;
 
     struct sockaddr_storage local_addr;
     struct sockaddr_storage remote_addr;
@@ -329,9 +410,11 @@ struct iperf_test
     char     *title;				/* -T option */
     char     *extra_data;			/* --extra-data */
     char     *congestion;			/* -C option */
-    char     *congestion_used;			/* what was actually used */
+char     *congestion_used;		/* what was actually used */
     char     *remote_congestion_used;		/* what the other side used */
     char     *pidfile;				/* -P option */
+
+    struct iperf_clock_sync *clock_sync;    /* --measure-latency control-channel clock sync */
 
     char     *logfile;				/* --logfile option */
     FILE     *outfile;

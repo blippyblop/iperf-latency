@@ -1192,6 +1192,7 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
         {"mptcp", no_argument, NULL, 'm'},
 #endif
         {"gsro", no_argument, NULL, OPT_GSRO},
+        {"measure-latency", no_argument, NULL, OPT_MEASURE_LATENCY},
         {"debug", optional_argument, NULL, 'd'},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0}
@@ -1216,6 +1217,7 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
     blksize = 0;
     server_flag = client_flag = rate_flag = duration_flag = rcv_timeout_flag = snd_timeout_flag =0;
     int gsro_flag = 0;
+    int measure_latency_flag = 0;
 #if defined(HAVE_SSL)
     char *client_username = NULL, *client_rsa_public_key = NULL, *server_rsa_private_key = NULL;
     FILE *ptr_file;
@@ -1805,6 +1807,11 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
 		test->settings->gso = 1;
 		test->settings->gro = 1;
                 break;
+            case OPT_MEASURE_LATENCY:
+		/* Enable end-to-end UDP latency measurement (client-side option) */
+		measure_latency_flag = 1;
+		test->settings->measure_latency = 1;
+                break;
 	    case 'h':
 		usage_long(stdout);
 		exit(0);
@@ -1826,6 +1833,14 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
     }
     if (test->role == 's' && gsro_flag) {
         i_errno = IECLIENTONLY;
+        return -1;
+    }
+    if (test->role == 's' && measure_latency_flag) {
+        i_errno = IECLIENTONLY;
+        return -1;
+    }
+    if (measure_latency_flag && test->protocol->id != Pudp) {
+        i_errno = IEMEASURELAT;
         return -1;
     }
 
@@ -2280,6 +2295,318 @@ iperf_recv_mt(struct iperf_stream *sp)
     return 0;
 }
 
+/**************************************************************************/
+/* --measure-latency: NTP-style clock synchronization over the control channel
+ *
+ * The client sends CLOCK_SYNC_REQ once per second while the test is
+ * running, carrying T1 (request timestamp) and the T4 (response
+ * reception timestamp) of the previous exchange.  The server stamps T2
+ * and T3 around its reply (CLOCK_SYNC_RSP carrying T2 and T3).
+ *
+ * Each side records
+ *      offset = own clock - peer clock
+ *      rtt    = round trip time of the exchange
+ * and keeps a ring of recent samples.  The working clock offset is taken
+ * from the sample with the lowest RTT; the offset variation is the
+ * standard deviation of the offsets of samples whose RTT is within
+ * twice the minimum.  Both sides converge to the same magnitude of
+ * offset (with opposite sign), which is then removed from the transit
+ * time of each UDP packet on the receiving side.
+ */
+
+#define CLOCK_SYNC_REQ_TIMEOUT 5 /* seconds before an in-flight request is given up */
+#define CLOCK_SYNC_INTERVAL 1    /* seconds between sync requests (~1 Hz) */
+
+int
+iperf_clock_sync_init(struct iperf_test *test)
+{
+    struct iperf_clock_sync *cs;
+
+    if (test->clock_sync == NULL) {
+        cs = (struct iperf_clock_sync *) calloc(1, sizeof(struct iperf_clock_sync));
+        if (cs == NULL) {
+            i_errno = IEINITTEST;
+            return -1;
+        }
+        cs->ring_offset = (double *) malloc(IPERF_LATENCY_RING_CAP * sizeof(double));
+        cs->ring_rtt = (double *) malloc(IPERF_LATENCY_RING_CAP * sizeof(double));
+        if (cs->ring_offset == NULL || cs->ring_rtt == NULL) {
+            free(cs->ring_offset);
+            free(cs->ring_rtt);
+            free(cs);
+            i_errno = IEINITTEST;
+            return -1;
+        }
+        test->clock_sync = cs;
+    }
+    cs = test->clock_sync;
+    cs->enabled = (test->settings->measure_latency && test->protocol->id == Pudp) ? 1 : 0;
+    cs->valid = 0;
+    cs->offset = 0.0;
+    cs->min_rtt = 0.0;
+    cs->offset_stdev = 0.0;
+    cs->samples = 0;
+    cs->errors = 0;
+    cs->outstanding = 0;
+    cs->t1 = cs->t2 = cs->t3 = cs->t4 = 0;
+    cs->pending = 0;
+    cs->ring_count = 0;
+    cs->ring_idx = 0;
+    return 0;
+}
+
+void
+iperf_clock_sync_free(struct iperf_test *test)
+{
+    struct iperf_clock_sync *cs;
+
+    if (test == NULL || test->clock_sync == NULL)
+        return;
+    cs = test->clock_sync;
+    free(cs->ring_offset);
+    free(cs->ring_rtt);
+    free(cs);
+    test->clock_sync = NULL;
+}
+
+static void
+iperf_clock_sync_add_sample(struct iperf_test *test, double offset, double rtt)
+{
+    struct iperf_clock_sync *cs = test->clock_sync;
+    size_t i, best;
+    int n;
+    double sum, sumsq, mean;
+
+    cs->samples++;
+    cs->ring_offset[cs->ring_idx] = offset;
+    cs->ring_rtt[cs->ring_idx] = rtt;
+    cs->ring_idx = (cs->ring_idx + 1) % IPERF_LATENCY_RING_CAP;
+    if (cs->ring_count < IPERF_LATENCY_RING_CAP)
+        cs->ring_count++;
+
+    /* Select the offset of the lowest-RTT sample in the ring. */
+    best = 0;
+    for (i = 1; i < cs->ring_count; i++)
+        if (cs->ring_rtt[i] < cs->ring_rtt[best])
+            best = i;
+    cs->offset = cs->ring_offset[best];
+    cs->min_rtt = cs->ring_rtt[best];
+
+    /* Offset variation over the most reliable samples. */
+    n = 0;
+    sum = sumsq = 0.0;
+    for (i = 0; i < cs->ring_count; i++) {
+        if (cs->ring_rtt[i] <= 2.0 * cs->min_rtt) {
+            sum += cs->ring_offset[i];
+            sumsq += cs->ring_offset[i] * cs->ring_offset[i];
+            n++;
+        }
+    }
+    if (n == 0) {
+        n = 1;
+        sum = cs->offset;
+        sumsq = cs->offset * cs->offset;
+    }
+    mean = sum / (double) n;
+    {
+        double v = sumsq / (double) n - mean * mean;
+        cs->offset_stdev = sqrt(v > 0.0 ? v : 0.0);
+    }
+    cs->valid = 1;
+
+    if (test->debug_level >= DEBUG_LEVEL_DEBUG)
+        printf("clock sync: offset=%g s min_rtt=%g s samples=%d errors=%d\n",
+               cs->offset, cs->min_rtt, cs->samples, cs->errors);
+}
+
+/* Client side: send a CLOCK_SYNC_REQ at ~1 Hz while the test is running. */
+void
+iperf_clock_sync_client_tick(struct iperf_test *test)
+{
+    struct iperf_clock_sync *cs;
+    struct iperf_time now, diff;
+    char msg[1 + 2 * sizeof(uint64_t)];
+    uint64_t v;
+
+    if (test == NULL || test->clock_sync == NULL)
+        return;
+    cs = test->clock_sync;
+    if (!cs->enabled)
+        return;
+    switch (test->state) {
+        case TEST_START:
+        case TEST_RUNNING:
+        case TEST_END:
+        case EXCHANGE_RESULTS:
+        case DISPLAY_RESULTS:
+            break;
+        default:
+            return;
+    }
+
+    iperf_time_now(&now);
+    if (cs->outstanding) {
+        /* A request is in flight; give up on it if it takes too long. */
+        iperf_time_diff(&now, &cs->last_request, &diff);
+        if (iperf_time_in_usecs(&diff) > CLOCK_SYNC_REQ_TIMEOUT * SEC_TO_US) {
+            cs->outstanding = 0;
+            cs->errors++;
+            if (test->debug_level >= DEBUG_LEVEL_WARN)
+                fprintf(stderr, "clock sync: request timed out\n");
+        } else {
+            return;
+        }
+    }
+
+    iperf_time_now(&now);
+    iperf_time_diff(&now, &cs->last_request, &diff);
+    /* Throttle to ~CLOCK_SYNC_INTERVAL.  last_request starts at zero, so the
+     * first request is sent immediately.  Note the client main loop wakes on
+     * the 1 s stats/reporter timers, so the effective cadence is ~1 s. */
+    if (iperf_time_in_usecs(&diff) < CLOCK_SYNC_INTERVAL * SEC_TO_US)
+        return;
+
+    cs->t1 = iperf_time_in_usecs(&now);
+    cs->last_request = now;
+    cs->outstanding = 1;
+
+    msg[0] = CLOCK_SYNC_REQ;
+    v = htobe64(cs->t1);
+    memcpy(msg + 1, &v, sizeof(v));
+    v = htobe64(cs->t4); /* T4 of the previous exchange, 0 for the first request */
+    memcpy(msg + 1 + sizeof(uint64_t), &v, sizeof(v));
+    if (Nwrite(test->ctrl_sck, msg, sizeof(msg), Ptcp) < 0) {
+        cs->outstanding = 0;
+        cs->errors++;
+        i_errno = IECTRLWRITE;
+    }
+}
+
+/* Client side: process a CLOCK_SYNC_RSP (T2, T3) for the last request. */
+int
+iperf_clock_sync_handle_response(struct iperf_test *test)
+{
+    struct iperf_clock_sync *cs = test->clock_sync;
+    char buf[2 * sizeof(uint64_t)];
+    uint64_t t2, t3, t4, v;
+    struct iperf_time now;
+
+    if (cs == NULL || !cs->enabled)
+        return 0;
+
+    if (Nread(test->ctrl_sck, buf, sizeof(buf), Ptcp) < 0) {
+        i_errno = IECTRLREAD;
+        return -1;
+    }
+    v = be64toh(*(uint64_t *) buf);
+    t2 = v;
+    v = be64toh(*(uint64_t *) (buf + sizeof(uint64_t)));
+    t3 = v;
+
+    iperf_time_now(&now);
+    t4 = iperf_time_in_usecs(&now);
+
+    if (!cs->outstanding)
+        return 0; /* Stale response (e.g. after the test ended); ignore it. */
+    cs->outstanding = 0;
+
+    /* All differences are taken as signed int64 of the raw microsecond
+     * values so that mixed-clock-domain differences (e.g. t4 - t3, which
+     * is normally negative) do not wrap around modulo 2^64.
+     */
+    int64_t d_t4t1 = (int64_t) t4 - (int64_t) cs->t1; /* same clock (client) */
+    int64_t d_t3t2 = (int64_t) t3 - (int64_t) t2;     /* same clock (server) */
+    if (d_t4t1 >= 0 && d_t3t2 >= 0) {
+        double rtt = ((double) d_t4t1 - (double) d_t3t2) / 1e6;
+        if (rtt >= 0.0) {
+            /* offset = client clock - server clock */
+            double offset = (((double) ((int64_t) cs->t1 - (int64_t) t2)) +
+                             ((double) ((int64_t) t4 - (int64_t) t3))) / 2.0 / 1e6;
+            cs->t4 = t4;
+            iperf_clock_sync_add_sample(test, offset, rtt);
+        } else {
+            cs->errors++;
+        }
+    } else {
+        cs->errors++;
+    }
+    return 0;
+}
+
+/* Server side: process a CLOCK_SYNC_REQ (T1 plus the T4 of the previous
+ * exchange), completing the previous sample, and reply CLOCK_SYNC_RSP (T2, T3).
+ */
+int
+iperf_clock_sync_handle_request(struct iperf_test *test)
+{
+    struct iperf_clock_sync *cs = test->clock_sync;
+    char buf[2 * sizeof(uint64_t)];
+    char msg[1 + 2 * sizeof(uint64_t)];
+    uint64_t t1, t4, v;
+    struct iperf_time now;
+
+    if (cs == NULL || !cs->enabled)
+        return 0; /* Should not happen: the client only sends when the feature is on. */
+
+    if (Nread(test->ctrl_sck, buf, sizeof(buf), Ptcp) < 0) {
+        i_errno = IECTRLREAD;
+        return -1;
+    }
+    v = be64toh(*(uint64_t *) buf);
+    t1 = v;
+    v = be64toh(*(uint64_t *) (buf + sizeof(uint64_t)));
+    t4 = v;
+
+    /* Complete the previous exchange, if any, using the piggybacked T4. */
+    if (cs->pending) {
+        cs->pending = 0;
+        if (t4 > 0) {
+            int64_t d_t4t1 = (int64_t) t4 - (int64_t) cs->t1; /* same clock (client) */
+            int64_t d_t3t2 = (int64_t) cs->t3 - (int64_t) cs->t2; /* same clock (server) */
+            if (d_t4t1 >= 0 && d_t3t2 >= 0) {
+                double rtt = ((double) d_t4t1 - (double) d_t3t2) / 1e6;
+                if (rtt >= 0.0) {
+                    /* offset = server clock - client clock.  All four
+                     * timestamps belong to the previous exchange: cs->t1
+                     * (client T1), cs->t2/cs->t3 (server), t4 (client T4,
+                     * piggybacked in this request).
+                     */
+                    double offset = (((double) ((int64_t) cs->t2 - (int64_t) cs->t1)) +
+                                     ((double) ((int64_t) cs->t3 - (int64_t) t4))) / 2.0 / 1e6;
+                    iperf_clock_sync_add_sample(test, offset, rtt);
+                } else {
+                    cs->errors++;
+                }
+            } else {
+                cs->errors++;
+            }
+        } else {
+            cs->errors++;
+        }
+    }
+
+    /* Start a new exchange. */
+    cs->t1 = t1;
+    iperf_time_now(&now);
+    cs->t2 = iperf_time_in_usecs(&now);
+    iperf_time_now(&now);
+    cs->t3 = iperf_time_in_usecs(&now);
+    cs->pending = 1;
+
+    msg[0] = CLOCK_SYNC_RSP;
+    v = htobe64(cs->t2);
+    memcpy(msg + 1, &v, sizeof(v));
+    v = htobe64(cs->t3);
+    memcpy(msg + 1 + sizeof(uint64_t), &v, sizeof(v));
+    if (Nwrite(test->ctrl_sck, msg, sizeof(msg), Ptcp) < 0) {
+        cs->pending = 0;
+        cs->errors++;
+        i_errno = IECTRLWRITE;
+        return -1;
+    }
+    return 0;
+}
+
 int
 iperf_init_test(struct iperf_test *test)
 {
@@ -2289,6 +2616,25 @@ iperf_init_test(struct iperf_test *test)
     if (test->protocol->init) {
         if (test->protocol->init(test) < 0)
             return -1;
+    }
+
+    /*
+     * --measure-latency: (re)initialize the control-channel clock
+     * synchronization state, and set up per-stream latency sampling on
+     * the receiving side.
+     */
+    if (test->settings->measure_latency && test->protocol->id == Pudp) {
+        if (iperf_clock_sync_init(test) < 0)
+            return -1;
+        SLIST_FOREACH(sp, &test->streams, streams) {
+            if (!sp->sender && sp->latency == NULL) {
+                sp->latency = iperf_latency_new();
+                if (sp->latency == NULL) {
+                    i_errno = IEINITTEST;
+                    return -1;
+                }
+            }
+        }
     }
 
     /* Init each stream. */
@@ -2479,6 +2825,8 @@ send_parameters(struct iperf_test *test)
 	    cJSON_AddNumberToObject(j, "gso_bf_size", test->settings->gso_bf_size);
 	    cJSON_AddNumberToObject(j, "gro", test->settings->gro);
 	    cJSON_AddNumberToObject(j, "gro_bf_size", test->settings->gro_bf_size);
+	    if (test->settings->measure_latency)
+		cJSON_AddTrueToObject(j, "measure_latency");
 	}
 	if (test->settings->tos)
 	    cJSON_AddNumberToObject(j, "TOS", test->settings->tos);
@@ -2706,14 +3054,16 @@ get_parameters(struct iperf_test *test)
 	        test->settings->gro = j_p->valueint;
             }
         }
-	if ((j_p = iperf_cJSON_GetObjectItemType(j, "gro_bf_size", cJSON_Number)) != NULL){
+if ((j_p = iperf_cJSON_GetObjectItemType(j, "gro_bf_size", cJSON_Number)) != NULL){
             if (j_p->valueint < 0){
                 i_errno = IERECVPARAMS;
                 r = -1;
             } else {
-	        test->settings->gro_bf_size = j_p->valueint;
+                test->settings->gro_bf_size = j_p->valueint;
             }
         }
+	if ((j_p = iperf_cJSON_GetObjectItemType(j, "measure_latency", cJSON_True)) != NULL)
+	    test->settings->measure_latency = 1;
 	if ((j_p = iperf_cJSON_GetObjectItemType(j, "bandwidth", cJSON_Number)) != NULL){
             if (j_p->valueint < 0){
                 i_errno = IERECVPARAMS;
@@ -2947,6 +3297,22 @@ send_results(struct iperf_test *test)
 		    cJSON_AddNumberToObject(j_stream, "packets", sp->packet_count);
                     cJSON_AddNumberToObject(j_stream, "omitted_packets", sp->omitted_packet_count);
 
+		    /* --measure-latency: whole-test latency stats (receiver side only) */
+		    if (test->settings->measure_latency && test->protocol->id == Pudp && sp->latency != NULL) {
+			struct iperf_latency_stats ls;
+		        iperf_latency_total_stats(sp->latency, &ls);
+		        if (ls.count > 0) {
+			    cJSON_AddNumberToObject(j_stream, "latency_min_ms", ls.min);
+			    cJSON_AddNumberToObject(j_stream, "latency_mean_ms", ls.mean);
+			    cJSON_AddNumberToObject(j_stream, "latency_median_ms", ls.median);
+			    cJSON_AddNumberToObject(j_stream, "latency_p95_ms", ls.p95);
+			    cJSON_AddNumberToObject(j_stream, "latency_p99_ms", ls.p99);
+			    cJSON_AddNumberToObject(j_stream, "latency_max_ms", ls.max);
+			    cJSON_AddNumberToObject(j_stream, "latency_stdev_ms", ls.stdev);
+			    cJSON_AddNumberToObject(j_stream, "latency_samples", (int64_t) ls.count);
+		        }
+		    }
+
 		    iperf_time_diff(&sp->result->start_time, &sp->result->start_time, &temp_time);
 		    start_time = iperf_time_in_secs(&temp_time);
 		    iperf_time_diff(&sp->result->start_time, &sp->result->end_time, &temp_time);
@@ -3005,6 +3371,10 @@ get_results(struct iperf_test *test)
     iperf_size_t bytes_transferred;
     int retransmits;
     struct iperf_stream *sp;
+    /* --measure-latency: optional whole-test latency stats from the peer */
+    cJSON *j_latency_min, *j_latency_mean, *j_latency_median,
+          *j_latency_p95, *j_latency_p99, *j_latency_max,
+          *j_latency_stdev, *j_latency_samples;
 
     j = JSON_read(test->ctrl_sck, 0);
     if (j == NULL) {
@@ -3058,6 +3428,15 @@ get_results(struct iperf_test *test)
                         j_omitted_packets = iperf_cJSON_GetObjectItemType(j_stream, "omitted_packets", cJSON_Number);
 			j_start_time = iperf_cJSON_GetObjectItemType(j_stream, "start_time", cJSON_Number);
 			j_end_time = iperf_cJSON_GetObjectItemType(j_stream, "end_time", cJSON_Number);
+			/* --measure-latency: optional whole-test latency stats */
+			j_latency_min = iperf_cJSON_GetObjectItemType(j_stream, "latency_min_ms", cJSON_Number);
+			j_latency_mean = iperf_cJSON_GetObjectItemType(j_stream, "latency_mean_ms", cJSON_Number);
+			j_latency_median = iperf_cJSON_GetObjectItemType(j_stream, "latency_median_ms", cJSON_Number);
+			j_latency_p95 = iperf_cJSON_GetObjectItemType(j_stream, "latency_p95_ms", cJSON_Number);
+			j_latency_p99 = iperf_cJSON_GetObjectItemType(j_stream, "latency_p99_ms", cJSON_Number);
+			j_latency_max = iperf_cJSON_GetObjectItemType(j_stream, "latency_max_ms", cJSON_Number);
+			j_latency_stdev = iperf_cJSON_GetObjectItemType(j_stream, "latency_stdev_ms", cJSON_Number);
+			j_latency_samples = iperf_cJSON_GetObjectItemType(j_stream, "latency_samples", cJSON_Number);
 			if (j_id == NULL || j_bytes == NULL || j_retransmits == NULL || j_jitter == NULL || j_errors == NULL || j_packets == NULL) {
 			    i_errno = IERECVRESULTS;
 			    r = -1;
@@ -3108,13 +3487,28 @@ get_results(struct iperf_test *test)
 				     * We need to have result structure members to hold
 				     * the both sides' start_time and end_time.
 				     */
-				    if (j_start_time && j_end_time) {
-					sp->result->receiver_time = j_end_time->valuedouble - j_start_time->valuedouble;
-				    }
-				    else {
-					sp->result->receiver_time = 0.0;
-				    }
-				} else {
+if (j_start_time && j_end_time) {
+ 					sp->result->receiver_time = j_end_time->valuedouble - j_start_time->valuedouble;
+ 				    }
+ 				    else {
+ 					sp->result->receiver_time = 0.0;
+ 				    }
+ 				    /* --measure-latency: whole-test latency stats from the peer (receiver) */
+ 				    if (j_latency_min != NULL && j_latency_mean != NULL &&
+ 				        j_latency_median != NULL && j_latency_p95 != NULL &&
+ 				        j_latency_p99 != NULL && j_latency_max != NULL &&
+ 				        j_latency_stdev != NULL && j_latency_samples != NULL) {
+ 				        sp->latency_peer.min = j_latency_min->valuedouble;
+ 				        sp->latency_peer.mean = j_latency_mean->valuedouble;
+ 				        sp->latency_peer.median = j_latency_median->valuedouble;
+ 				        sp->latency_peer.p95 = j_latency_p95->valuedouble;
+ 				        sp->latency_peer.p99 = j_latency_p99->valuedouble;
+ 				        sp->latency_peer.max = j_latency_max->valuedouble;
+ 				        sp->latency_peer.stdev = j_latency_stdev->valuedouble;
+ 				        sp->latency_peer.count = (int64_t) j_latency_samples->valueint;
+ 				        sp->latency_peer_valid = 1;
+ 				    }
+ 				} else {
 				    sp->peer_packet_count = pcount;
 				    sp->result->bytes_sent = bytes_transferred;
 				    sp->result->stream_retrans = retransmits;
@@ -3694,6 +4088,9 @@ iperf_free_test(struct iperf_test *test)
     if (test->bitrate_limit_intervals_traffic_bytes != NULL)
         free(test->bitrate_limit_intervals_traffic_bytes);
 
+    /* Free the clock sync state used by --measure-latency */
+    iperf_clock_sync_free(test);
+
     /* XXX: Why are we setting these values to NULL? */
     // test->streams = NULL;
     test->stats_callback = NULL;
@@ -3893,6 +4290,10 @@ iperf_stats_callback(struct iperf_test *test)
     temp.rtt = 0;
     temp.rttvar = 0;
     temp.pmtu = 0;
+    temp.latency_count = 0;
+    temp.latency_min = temp.latency_max = 0.0;
+    temp.latency_mean = temp.latency_median = 0.0;
+    temp.latency_p95 = temp.latency_p99 = temp.latency_stdev = 0.0;
     SLIST_FOREACH(sp, &test->streams, streams) {
         rp = sp->result;
 	temp.bytes_transferred = sp->sender ? rp->bytes_sent_this_interval : rp->bytes_received_this_interval;
@@ -3991,6 +4392,29 @@ iperf_stats_callback(struct iperf_test *test)
             }
         }
 #endif /* HAVE_SCTP_H */
+
+        /*
+         * --measure-latency: gather the latency statistics of the
+         * current interval from the receiving-side sample buffer
+         * (which is reset by iperf_latency_interval_stats).
+         */
+        if (sp->latency != NULL) {
+            struct iperf_latency_stats ls;
+            iperf_latency_interval_stats(sp->latency, &ls);
+            temp.latency_count = ls.count;
+            temp.latency_min = ls.min;
+            temp.latency_max = ls.max;
+            temp.latency_mean = ls.mean;
+            temp.latency_median = ls.median;
+            temp.latency_p95 = ls.p95;
+            temp.latency_p99 = ls.p99;
+            temp.latency_stdev = ls.stdev;
+        } else {
+            temp.latency_count = 0;
+            temp.latency_min = temp.latency_max = 0.0;
+            temp.latency_mean = temp.latency_median = 0.0;
+            temp.latency_p95 = temp.latency_p99 = temp.latency_stdev = 0.0;
+        }
 
         add_to_interval_list(rp, &temp);
         rp->bytes_sent_this_interval = rp->bytes_received_this_interval = 0;
@@ -4236,6 +4660,24 @@ iperf_print_intermediate(struct iperf_test *test)
         JSONStream_Output(test, "interval", json_interval);
     if (discard_json)
         cJSON_Delete(json_interval);
+}
+
+/* --measure-latency: resolve the whole-test latency stats for a stream.
+ * Local receiver samples win; otherwise use peer-provided stats received
+ * from the other side over the control channel.  Returns 1 if available.
+ */
+static int
+iperf_stream_latency_stats(struct iperf_stream *sp, struct iperf_latency_stats *ls)
+{
+    if (sp->latency != NULL) {
+        iperf_latency_total_stats(sp->latency, ls);
+        return ls->count > 0;
+    }
+    if (sp->latency_peer_valid) {
+        *ls = sp->latency_peer;
+        return 1;
+    }
+    return 0;
 }
 
 /**
@@ -4485,7 +4927,21 @@ iperf_print_results(struct iperf_test *test)
                          * instead.
                          */
                         int64_t packet_count = sender_packet_count ? sender_packet_count : receiver_packet_count;
-                        cJSON_AddItemToObject(json_summary_stream, "udp", iperf_json_printf("socket: %d  start: %f  end: %f  seconds: %f  bytes: %d  bits_per_second: %f  jitter_ms: %f  lost_packets: %d  packets: %d  lost_percent: %f  out_of_order: %d sender: %b", (int64_t) sp->socket, (double) start_time, (double) sender_time, (double) sender_time, (int64_t) bytes_sent, bandwidth * 8, (double) sp->jitter * 1000.0, (int64_t) (sp->cnt_error - sp->omitted_cnt_error), (int64_t) (packet_count - sp->omitted_packet_count), (double) lost_percent, (int64_t) (sp->outoforder_packets - sp->omitted_outoforder_packets), stream_must_be_sender));
+                        cJSON *j_udp = iperf_json_printf("socket: %d  start: %f  end: %f  seconds: %f  bytes: %d  bits_per_second: %f  jitter_ms: %f  lost_packets: %d  packets: %d  lost_percent: %f  out_of_order: %d sender: %b", (int64_t) sp->socket, (double) start_time, (double) sender_time, (double) sender_time, (int64_t) bytes_sent, bandwidth * 8, (double) sp->jitter * 1000.0, (int64_t) (sp->cnt_error - sp->omitted_cnt_error), (int64_t) (packet_count - sp->omitted_packet_count), (double) lost_percent, (int64_t) (sp->outoforder_packets - sp->omitted_outoforder_packets), stream_must_be_sender);
+                        cJSON_AddItemToObject(json_summary_stream, "udp", j_udp);
+                        if (j_udp != NULL && test->settings->measure_latency && test->protocol->id == Pudp) {
+                            struct iperf_latency_stats ls;
+                            if (iperf_stream_latency_stats(sp, &ls)) {
+                                cJSON_AddNumberToObject(j_udp, "latency_min_ms", ls.min);
+                                cJSON_AddNumberToObject(j_udp, "latency_mean_ms", ls.mean);
+                                cJSON_AddNumberToObject(j_udp, "latency_median_ms", ls.median);
+                                cJSON_AddNumberToObject(j_udp, "latency_p95_ms", ls.p95);
+                                cJSON_AddNumberToObject(j_udp, "latency_p99_ms", ls.p99);
+                                cJSON_AddNumberToObject(j_udp, "latency_max_ms", ls.max);
+                                cJSON_AddNumberToObject(j_udp, "latency_stdev_ms", ls.stdev);
+                                cJSON_AddNumberToObject(j_udp, "latency_samples", (int64_t) ls.count);
+                            }
+                        }
                     }
                     else {
                         /*
@@ -4577,6 +5033,12 @@ iperf_print_results(struct iperf_test *test)
                                 iperf_printf(test, report_bw_udp_format, sp->socket, mbuf, start_time, receiver_time, ubuf, nbuf, sp->jitter * 1000.0, (sp->cnt_error - sp->omitted_cnt_error), (receiver_packet_count - receiver_omitted_packet_count), lost_percent, report_receiver);
                             } else {
                                 iperf_printf(test, report_bw_udp_format_no_omitted_error, sp->socket, mbuf, start_time, receiver_time, ubuf, nbuf, sp->jitter * 1000.0, (receiver_packet_count - receiver_omitted_packet_count), report_receiver);
+                            }
+                        }
+                        if (test->settings->measure_latency && test->protocol->id == Pudp) {
+                            struct iperf_latency_stats ls;
+                            if (iperf_stream_latency_stats(sp, &ls)) {
+                                iperf_printf(test, report_latency_summary, sp->socket, mbuf, start_time, receiver_time, ls.min, ls.mean, ls.median, ls.p95, ls.p99, ls.max);
                             }
                         }
                     }
@@ -4710,6 +5172,30 @@ iperf_print_results(struct iperf_test *test)
                         }
                         unit_snprintf(nbuf, UNIT_LEN, bandwidth, test->settings->unit_format);
                         iperf_printf(test, report_sum_bw_udp_format, mbuf, start_time, receiver_time, ubuf, nbuf, avg_jitter * 1000.0, lost_packets, receiver_total_packets, lost_percent, report_receiver);
+                        if (test->settings->measure_latency && test->protocol->id == Pudp) {
+                            double agg_min = -1.0, agg_mean = 0.0, agg_p99 = -1.0, agg_max = -1.0;
+                            int64_t agg_samples = 0;
+                            struct iperf_stream *nsp;
+                            SLIST_FOREACH(nsp, &test->streams, streams) {
+                                struct iperf_latency_stats ls;
+                                if (nsp->sender != stream_must_be_sender)
+                                    continue;
+                                if (iperf_stream_latency_stats(nsp, &ls)) {
+                                    if (agg_min < 0.0 || ls.min < agg_min)
+                                        agg_min = ls.min;
+                                    if (ls.max > agg_max)
+                                        agg_max = ls.max;
+                                    if (ls.p99 > agg_p99)
+                                        agg_p99 = ls.p99;
+                                    agg_mean += ls.mean * (double) ls.count;
+                                    agg_samples += ls.count;
+                                }
+                            }
+                            if (agg_samples > 0) {
+                                agg_mean /= (double) agg_samples;
+                                iperf_printf(test, report_sum_latency, mbuf, start_time, receiver_time, agg_p99);
+                            }
+                        }
                     }
                 }
             }
@@ -4777,6 +5263,46 @@ iperf_print_results(struct iperf_test *test)
 	            free(test->server_output_text);
                     test->server_output_text = NULL;
                 }
+            }
+        }
+    }
+
+    /* --measure-latency: sync quality info (JSON) or per-stream PACKET
+     * LATENCY blocks (human-readable).
+     */
+    if (test->settings->measure_latency && test->protocol->id == Pudp) {
+        if (test->json_output) {
+            struct iperf_clock_sync *cs = test->clock_sync;
+            cJSON *jm = cJSON_CreateObject();
+            if (jm != NULL) {
+                cJSON_AddBoolToObject(jm, "enabled", 1);
+                if (cs != NULL) {
+                    cJSON_AddNumberToObject(jm, "clock_sync_samples", (int) cs->samples);
+                    cJSON_AddNumberToObject(jm, "clock_sync_errors", (int) cs->errors);
+                    cJSON_AddNumberToObject(jm, "clock_offset_ms", cs->offset * 1000.0);
+                    cJSON_AddNumberToObject(jm, "min_sync_rtt_ms", cs->min_rtt * 1000.0);
+                    cJSON_AddNumberToObject(jm, "offset_stdev_ms", cs->offset_stdev * 1000.0);
+                }
+                cJSON_AddItemToObject(test->json_end, "latency_measurement", jm);
+            }
+        } else {
+            struct iperf_stream *sp;
+            int multi = test->num_streams > 1;
+            SLIST_FOREACH(sp, &test->streams, streams) {
+                struct iperf_latency_stats ls;
+                if (!iperf_stream_latency_stats(sp, &ls))
+                    continue;
+                if (multi)
+                    iperf_printf(test, report_latency_header_stream, sp->socket);
+                else
+                    iperf_printf(test, report_latency_header);
+                iperf_printf(test, report_latency_min, ls.min);
+                iperf_printf(test, report_latency_mean, ls.mean);
+                iperf_printf(test, report_latency_median, ls.median);
+                iperf_printf(test, report_latency_stdev, ls.stdev);
+                iperf_printf(test, report_latency_p95, ls.p95);
+                iperf_printf(test, report_latency_p99, ls.p99);
+                iperf_printf(test, report_latency_max, ls.max);
             }
         }
     }
@@ -4922,8 +5448,19 @@ print_interval_results(struct iperf_test *test, struct iperf_stream *sp, cJSON *
 	    else {
 		lost_percent = 0.0;
 	    }
-	    if (test->json_output)
-		cJSON_AddItemToArray(json_interval_streams, iperf_json_printf("socket: %d  start: %f  end: %f  seconds: %f  bytes: %d  bits_per_second: %f  jitter_ms: %f  lost_packets: %d  packets: %d  lost_percent: %f  omitted: %b sender: %b", (int64_t) sp->socket, (double) st, (double) et, (double) irp->interval_duration, (int64_t) irp->bytes_transferred, bandwidth * 8, (double) irp->jitter * 1000.0, (int64_t) irp->interval_cnt_error, (int64_t) irp->interval_packet_count, (double) lost_percent, irp->omitted, sp->sender));
+	    if (test->json_output) {
+		    cJSON *o = iperf_json_printf("socket: %d  start: %f  end: %f  seconds: %f  bytes: %d  bits_per_second: %f  jitter_ms: %f  lost_packets: %d  packets: %d  lost_percent: %f  omitted: %b sender: %b", (int64_t) sp->socket, (double) st, (double) et, (double) irp->interval_duration, (int64_t) irp->bytes_transferred, bandwidth * 8, (double) irp->jitter * 1000.0, (int64_t) irp->interval_cnt_error, (int64_t) irp->interval_packet_count, (double) lost_percent, irp->omitted, sp->sender);
+		    if (o != NULL && test->settings->measure_latency && irp->latency_count > 0) {
+			cJSON_AddNumberToObject(o, "latency_min_ms", irp->latency_min);
+			cJSON_AddNumberToObject(o, "latency_mean_ms", irp->latency_mean);
+			cJSON_AddNumberToObject(o, "latency_median_ms", irp->latency_median);
+			cJSON_AddNumberToObject(o, "latency_p95_ms", irp->latency_p95);
+			cJSON_AddNumberToObject(o, "latency_p99_ms", irp->latency_p99);
+			cJSON_AddNumberToObject(o, "latency_max_ms", irp->latency_max);
+			cJSON_AddNumberToObject(o, "latency_stdev_ms", irp->latency_stdev);
+		    }
+		    cJSON_AddItemToArray(json_interval_streams, o);
+	    }
 	    else
 		iperf_printf(test, report_bw_udp_format, sp->socket, mbuf, st, et, ubuf, nbuf, irp->jitter * 1000.0, irp->interval_cnt_error, irp->interval_packet_count, lost_percent, irp->omitted?report_omitted:"");
 	}
@@ -4952,6 +5489,10 @@ iperf_free_stream(struct iperf_stream *sp)
         free(irp);
     }
     free(sp->result);
+    if (sp->latency != NULL) {
+        iperf_latency_free(sp->latency);
+        sp->latency = NULL;
+    }
     if (sp->send_timer != NULL)
 	tmr_cancel(sp->send_timer);
     free(sp);
@@ -5401,7 +5942,7 @@ iperf_create_pidfile(struct iperf_test *test)
 			 */
 			free(test->pidfile);
 			test->pidfile = NULL;
-			iperf_errexit(test, "Another instance of iperf3 appears to be running");
+			iperf_errexit(test, "Another instance of iperf-latency appears to be running");
 		    }
 		}
 	    }

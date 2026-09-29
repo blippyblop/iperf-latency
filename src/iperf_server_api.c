@@ -240,13 +240,14 @@ iperf_handle_message_server(struct iperf_test *test)
 {
     int rval;
     struct iperf_stream *sp;
+    signed char state_byte;
 
     if (test->debug_level >= DEBUG_LEVEL_INFO) {
         iperf_printf(test, "Reading new State from the Client - current state is %d-%s\n", test->state, state_to_text(test->state));
     }
 
     // XXX: Need to rethink how this behaves to fit API
-    if ((rval = Nread(test->ctrl_sck, (char*) &test->state, sizeof(signed char), Ptcp)) <= 0) {
+    if ((rval = Nread(test->ctrl_sck, (char*) &state_byte, sizeof(signed char), Ptcp)) <= 0) {
         if (rval == 0) {
             iperf_err(test, "the client has unexpectedly closed the connection");
             i_errno = IECTRLCLOSE;
@@ -257,6 +258,15 @@ iperf_handle_message_server(struct iperf_test *test)
             return -1;
         }
     }
+
+    /* --measure-latency: a clock-sync request is not a state change. */
+    if (state_byte == CLOCK_SYNC_REQ) {
+        if (iperf_clock_sync_handle_request(test) < 0)
+            return -1;
+        return 0;
+    }
+
+    test->state = state_byte;
 
     if (test->debug_level >= DEBUG_LEVEL_INFO) {
         iperf_printf(test, "State change: server received and changed State to %d-%s\n", test->state, state_to_text(test->state));

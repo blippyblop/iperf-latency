@@ -107,6 +107,7 @@ typedef atomic_uint_fast64_t atomic_iperf_size_t;
 #define OPT_JSON_STREAM_FULL_OUTPUT 33
 #define OPT_SERVER_MAX_DURATION 34
 #define OPT_GSRO 35
+#define OPT_MEASURE_LATENCY 36
 
 /* states */
 #define TEST_START 1
@@ -125,6 +126,8 @@ typedef atomic_uint_fast64_t atomic_iperf_size_t;
 #define DISPLAY_RESULTS 14
 #define IPERF_START 15
 #define IPERF_DONE 16
+#define CLOCK_SYNC_REQ 17
+#define CLOCK_SYNC_RSP 18
 #define ACCESS_DENIED (-1)
 #define SERVER_ERROR (-2)
 
@@ -351,6 +354,20 @@ void usage_long(FILE * f);
 void warning(const char *);
 int iperf_exchange_results(struct iperf_test *);
 int iperf_init_test(struct iperf_test *);
+
+/* --measure-latency: NTP-style clock synchronization over the control channel.
+ * iperf_clock_sync_init -- set up the clock-sync state (client and server)
+ * iperf_clock_sync_free -- release the clock-sync state
+ * iperf_clock_sync_client_tick -- call once per loop iteration on the client:
+ *                                 sends a sync request at ~1 Hz
+ * iperf_clock_sync_handle_response -- client: process a CLOCK_SYNC_RSP message
+ * iperf_clock_sync_handle_request  -- server: process a CLOCK_SYNC_REQ message
+ */
+int iperf_clock_sync_init(struct iperf_test *);
+void iperf_clock_sync_free(struct iperf_test *);
+void iperf_clock_sync_client_tick(struct iperf_test *);
+int iperf_clock_sync_handle_response(struct iperf_test *);
+int iperf_clock_sync_handle_request(struct iperf_test *);
 int iperf_create_send_timers(struct iperf_test *);
 int iperf_parse_arguments(struct iperf_test *, int, char **);
 int iperf_open_logfile(struct iperf_test *);
@@ -508,6 +525,7 @@ enum {
     IESETCNTLKACOUNT = 158,    // Unable to set/get socket keepalive TCP number of retries (TCP_KEEPCNT) option
     IEPTHREADSIGMASK=159,      // Unable to initialize sub thread signal mask (check perror)
     IESERVERTESTDURATIONEXPIRED = 160, // Server test duration expired
+    IEMEASURELAT = 161,       // --measure-latency is only supported with UDP
     /* Stream errors */
     IECREATESTREAM = 200,   // Unable to create a new stream (check herror/perror)
     IEINITSTREAM = 201,     // Unable to initialize stream (check herror/perror)

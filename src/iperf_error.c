@@ -68,13 +68,13 @@ iperf_err(struct iperf_test *test, const char *format, ...)
 	    if (ct) {
 		fprintf(test->outfile, "%s", ct);
 	    }
-	    fprintf(test->outfile, "iperf3: %s\n", str);
+	    fprintf(test->outfile, "iperf-latency: %s\n", str);
 	}
 	else {
 	    if (ct) {
 		fprintf(stderr, "%s", ct);
 	    }
-	    fprintf(stderr, "iperf3: %s\n", str);
+	    fprintf(stderr, "iperf-latency: %s\n", str);
 	}
 
         if (test != NULL && pthread_mutex_unlock(&(test->print_mutex)) != 0) {
@@ -137,13 +137,13 @@ iperf_exit(struct iperf_test *test, int exit_code, const char *format, va_list a
 	    if (ct) {
 		fprintf(test->outfile, "%s", ct);
 	    }
-	    fprintf(test->outfile, "iperf3: %s\n", str);
+	    fprintf(test->outfile, "iperf-latency: %s\n", str);
 	}
 	else {
 	    if (ct) {
 		fprintf(stderr, "%s", ct);
 	    }
-	    fprintf(stderr, "iperf3: %s\n", str);
+	    fprintf(stderr, "iperf-latency: %s\n", str);
 	}
 
         if (test != NULL && pthread_mutex_unlock(&(test->print_mutex)) != 0) {
@@ -565,6 +565,9 @@ iperf_strerror(int int_errno)
         case IESERVERTESTDURATIONEXPIRED:
             snprintf(errstr, len, "server test duration expired");
             perr = 1;
+            break;
+        case IEMEASURELAT:
+            snprintf(errstr, len, "--measure-latency is only supported for UDP tests");
             break;
         case IERVRSONLYSKIPRXCOPY:
             snprintf(errstr, len, "this OS does not support --skip-rx-copy");

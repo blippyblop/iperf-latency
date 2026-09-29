@@ -34,11 +34,11 @@ jobs:
         ./configure && make && make check
     - name: test commands
       run: |
-        timeout 300 src/iperf3 -s &
+        timeout 300 src/iperf-latency -s &
         ./test_commands.sh localhost
     - name: test auth
       run: |
-        pkill iperf3
+        pkill iperf-latency
         ./auth_test.sh
   build-test-macos-ish:
     strategy:
@@ -55,11 +55,11 @@ jobs:
         ./configure && make && make check
     - name: test commands
       run: |
-        timeout 300 src/iperf3 -s &
+        timeout 300 src/iperf-latency -s &
         ./test_commands.sh localhost
     - name: test auth
       run: |
-        pkill iperf3
+        pkill iperf-latency
         ./auth_test.sh
   build-test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -75,9 +75,9 @@ jobs:
         ./configure CFLAGS="-g -O0 -fsanitize=address" LDFLAGS="-fsanitize=address" && make && make check
     - name: test commands
       run: |
-        timeout 300 src/iperf3 -s &
+        timeout 300 src/iperf-latency -s &
         ./test_commands.sh localhost
     - name: test auth
       run: |
-        pkill iperf3
+        pkill iperf-latency
         ./auth_test.sh

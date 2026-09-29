@@ -93,10 +93,10 @@ extern    "C"
  * usage
  * ------------------------------------------------------------------- */
 
-const char usage_shortstr[] = "Usage: iperf3 [-s|-c host] [options]\n"
-                           "Try `iperf3 --help' for more information.\n";
+const char usage_shortstr[] = "Usage: iperf-latency [-s|-c host] [options]\n"
+                           "Try `iperf-latency --help' for more information.\n";
 
-const char usage_longstr[] = "Usage: iperf3 [-s|-c host] [options]\n"
+const char usage_longstr[] = "Usage: iperf-latency [-s|-c host] [options]\n"
                            "       iperf3 [-h|--help] [-v|--version]\n\n"
                            "Server or Client:\n"
                            "  -p, --port      #         server port to listen on/connect to\n"
@@ -221,7 +221,10 @@ const char usage_longstr[] = "Usage: iperf3 [-s|-c host] [options]\n"
                            "  --extra-data str          data string to include in client and server JSON\n"
                            "  --get-server-output       get results from server\n"
                            "  --udp-counters-64bit      use 64-bit counters in UDP test packets\n"
-                           "  --gsro                    enable UDP GSO/GRO on both client and server (client-only option)\n"
+"  --gsro                    enable UDP GSO/GRO on both client and server (client-only option)\n"
+                            "  --measure-latency         measure the end-to-end latency of the UDP test packets\n"
+                            "                            using NTP-style clock synchronization over the control\n"
+                            "                            connection (client-only, requires -u)\n"
                            "  --repeating-payload       use repeating pattern in payload, instead of\n"
                            "                            randomized payload (like in iperf2)\n"
 #if defined(HAVE_DONT_FRAGMENT)
@@ -240,7 +243,7 @@ const char usage_longstr[] = "Usage: iperf3 [-s|-c host] [options]\n"
                            "[KMG] indicates options that support a K/M/G suffix for kilo-, mega-, or giga-\n"
 			   "\n"
 #ifdef PACKAGE_URL
-                           "iperf3 homepage at: " PACKAGE_URL "\n"
+                           "iperf-latency homepage at: " PACKAGE_URL "\n"
 #endif /* PACKAGE_URL */
 #ifdef PACKAGE_BUGREPORT
                            "Report bugs to:     " PACKAGE_BUGREPORT "\n"
@@ -438,6 +441,44 @@ const char report_outoforder[] =
 
 const char report_sum_outoforder[] =
 "[SUM]%s %4.1f-%4.1f sec  %"PRIu64" datagrams received out-of-order\n";
+
+const char report_latency_interval[] =
+"[%3d]%s %6.2f-%-6.2f  pkt latency min/avg/max ms:  %7.3f / %7.3f / %7.3f\n";
+
+const char report_latency_summary[] =
+"[%3d]%s %6.2f-%-6.2f  pkt latency min/avg/med/p95/p99/max ms:  %7.3f / %7.3f / %7.3f / %7.3f / %7.3f / %7.3f\n";
+
+const char report_sum_latency[] =
+"[SUM]%s %6.2f-%-6.2f  pkt latency p99 ms:  %7.3f\n";
+
+const char report_latency_header[] =
+"\nPACKET LATENCY\n"
+"------------------------------------------------------------\n";
+
+const char report_latency_header_stream[] =
+"\n[%3d] PACKET LATENCY\n"
+"------------------------------------------------------------\n";
+
+const char report_latency_min[] =
+"Minimum:            %7.3f ms\n";
+
+const char report_latency_mean[] =
+"Average:            %7.3f ms\n";
+
+const char report_latency_median[] =
+"Median:             %7.3f ms\n";
+
+const char report_latency_stdev[] =
+"Std deviation:      %7.3f ms\n";
+
+const char report_latency_p95[] =
+"P95:               %7.3f ms\n";
+
+const char report_latency_p99[] =
+"P99:               %7.3f ms\n";
+
+const char report_latency_max[] =
+"Maximum:            %7.3f ms\n";
 
 const char report_peer[] =
 "[%3d] local %s port %u connected with %s port %u\n";

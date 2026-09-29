@@ -1,60 +1,60 @@
-.TH IPERF3 1 "April 2026" ESnet "User Manuals"
+.TH IPERF-LATENCY 1 "April 2026" ESnet "User Manuals"
 .SH NAME
-iperf3 \- perform network throughput tests
+iperf-latency \- perform network throughput tests
 .SH SYNOPSIS
-.B iperf3 -s [
+.B iperf-latency -s [
 .I options
 .B ]
 .br
-.B iperf3 -c
+.B iperf-latency -c
 .I server
 .B [
 .I options
 .B ]
 
 .SH DESCRIPTION
-iperf3 is a tool for performing network throughput measurements.
+iperf-latency is a tool for performing network throughput measurements.
 It can test TCP, UDP, or SCTP throughput.
-To perform an iperf3 test the user must establish both a server and a
+To perform an iperf-latency test the user must establish both a server and a
 client.
 .PP
-The iperf3 executable contains both client and server functionality.
-An iperf3 server can be started using either of the -s or
+The iperf-latency executable contains both client and server functionality.
+An iperf-latency server can be started using either of the -s or
 --server command-line parameters, for example:
 .IP
 \fCiperf3 -s\fR
 .IP
 \fCiperf3 --server \fR
 .PP
-Note that many iperf3 parameters have both short (-s) and long
+Note that many iperf-latency parameters have both short (-s) and long
 (--server) forms.
 In this section we will generally use the short form of command-line
 flags, unless only the long form of a flag is available.
 .PP
-By default, the iperf3 server listens on TCP port 5201 for connections
-from an iperf3 client.
+By default, the iperf-latency server listens on TCP port 5201 for connections
+from an iperf-latency client.
 A custom port can be specified by using the -p flag, for
 example:
 .IP
 \fCiperf3 -s -p 5002\fR
 .PP
 After the server is started, it will listen for connections from
-iperf3 clients (in other words, the iperf3 program run in client
+iperf-latency clients (in other words, the iperf-latency program run in client
 mode).
 The client mode can be started using the -c command-line option,
-which also requires a host to which iperf3 should connect.
+which also requires a host to which iperf-latency should connect.
 The host can be specified by hostname, IPv4 literal, or IPv6 literal:
 .IP
-\fCiperf3 -c iperf3.example.com\fR
+\fCiperf3 -c iperf-latency.example.com\fR
 .IP
 \fCiperf3 -c 192.0.2.1\fR
 .IP
 \fCiperf3 -c 2001:db8::1\fR
 .PP
-If the iperf3 server is running on a non-default TCP port, that port
+If the iperf-latency server is running on a non-default TCP port, that port
 number needs to be specified on the client as well:
 .IP
-\fCiperf3 -c iperf3.example.com -p 5002\fR
+\fCiperf3 -c iperf-latency.example.com -p 5002\fR
 .PP
 The initial TCP connection is used to exchange test parameters,
 control the start and end of the test, and to exchange test results.
@@ -69,7 +69,7 @@ Measuring the download speed from the server can be done by specifying
 the -R flag on the client.
 This causes data to be sent from the server to the client.
 .IP
-\fCiperf3 -c iperf3.example.com -p 5202 -R
+\fCiperf3 -c iperf-latency.example.com -p 5202 -R
 .PP
 Results are displayed on both the client and server.
 There will be at least one line of output per measurement interval (by
@@ -102,11 +102,11 @@ end of the test.
 By enabling line-delimited JSON multiple objects will be emitted to
 provide a real-time parsable JSON output.
 .PP
-iperf3 has a (overly) large set of command-line options that can be
+iperf-latency has a (overly) large set of command-line options that can be
 used to set the parameters of a test.
 They are given in the "GENERAL OPTIONS" section of the manual page
-below, as well as summarized in iperf3's help output, which can be
-viewed by running iperf3 with the -h flag.
+below, as well as summarized in iperf-latency's help output, which can be
+viewed by running iperf-latency with the -h flag.
 .SH "GENERAL OPTIONS"
 .TP
 .BR -p ", " --port " \fIn\fR"
@@ -128,7 +128,7 @@ Use a file as the source (on the sender) or sink (on the receiver) of
 data, rather than just generating random data or throwing it away.
 This feature is used for finding whether or not the storage subsystem
 is the bottleneck for file transfers.
-It does not turn iperf3 into a file transfer tool.
+It does not turn iperf-latency into a file transfer tool.
 The length, attributes, and in some cases contents of the received
 file may not match those of the original file. This option is
 unavailable when doing
@@ -210,12 +210,12 @@ This functionality depends on the TCP_USER_TIMEOUT socket option, and
 will not work on systems that do not support it.
 .TP
 .BR --use-pkcs1-padding
-This option is only meaningful when using iperf3's authentication
-features. Versions of iperf3 prior to 3.17 used PCKS1 padding in the
+This option is only meaningful when using iperf-latency's authentication
+features. Versions of iperf-latency prior to 3.17 used PCKS1 padding in the
 RSA-encrypted credentials, which was vulnerable to a side-channel
 attack that could reveal a server's private key.  Beginning with
 iperf-3.17, OAEP padding is used, however this is a breaking change
-that is not compatible with older iperf3 versions.  Use this option to
+that is not compatible with older iperf-latency versions.  Use this option to
 preserve the less secure, but more compatible, behavior.
 .TP
 .BR -m ", " --mptcp " "
@@ -307,7 +307,7 @@ Set timeout for establishing the initial control connection to the
 server, in milliseconds.
 The default behavior is the operating system's timeout for TCP
 connection establishment.
-Providing a shorter value may speed up detection of a down iperf3
+Providing a shorter value may speed up detection of a down iperf-latency
 server.
 .TP
 .BR -b ", " --bitrate " \fIn\fR[KMGT]"
@@ -322,7 +322,7 @@ even if that
 temporarily exceeds the specified throughput limit.
 Setting the target bitrate to 0 will disable bitrate limits
 (particularly useful for UDP tests).
-This throughput limit is implemented internally inside iperf3, and is
+This throughput limit is implemented internally inside iperf-latency, and is
 available on all platforms.
 Compare with the
 .B --fq-rate
@@ -335,18 +335,18 @@ but (at least for now) still accepted.
 .BR --pacing-timer " \fIn\fR[KMGT]"
 Set pacing timer interval in microseconds (default 1000 microseconds,
 or 1 ms).
-This controls iperf3's internal pacing timer for the \-b/\--bitrate
+This controls iperf-latency's internal pacing timer for the \-b/\--bitrate
 option.
 The timer fires at the interval set by this parameter.
 Smaller values of the pacing timer parameter smooth out the traffic
-emitted by iperf3, but potentially at the cost of performance due to
+emitted by iperf-latency, but potentially at the cost of performance due to
 more frequent timer processing.
 .TP
 .BR --fq-rate " \fIn\fR[KMGT]"
 Set a rate to be used with fair-queueing based socket-level pacing,
 in bits per second.
 This pacing (if specified) will be in addition to any pacing due to
-iperf3's internal throughput pacing (\-b/\--bitrate flag), and both can be
+iperf-latency's internal throughput pacing (\-b/\--bitrate flag), and both can be
 specified for the same test.
 Only available on platforms supporting the
 \fCSO_MAX_PACING_RATE\fR socket option (currently only Linux).
@@ -382,7 +382,7 @@ options are mutually exclusive.
 .BR -l ", " --length " \fIn\fR[KMGT]"
 Set the length of the buffer to read or write.  For TCP tests, the
 default value is 128KB.
-In the case of UDP, iperf3 tries to dynamically determine a reasonable
+In the case of UDP, iperf-latency tries to dynamically determine a reasonable
 sending size based on the path MTU; if that cannot be determined it
 uses 1460 bytes as a sending size.
 For SCTP tests, the default size is 64KB.
@@ -393,7 +393,7 @@ and UDP only, default is to use an ephemeral port).
 .TP
 .BR -P ", " --parallel " \fIn\fR"
 Set the number of parallel client streams to run. Beginning with
-iperf-3.16, iperf3 will spawn off a separate thread for each test
+iperf-3.16, iperf-latency will spawn off a separate thread for each test
 stream.
 Using multiple streams may result in higher throughput than a
 single stream, in cases where network throughput is CPU-limited.
@@ -416,7 +416,7 @@ size.
 Note that on Linux systems, the effective maximum window size is
 approximately
 double what is specified by this option.
-This behavior is not a bug in iperf3 but a feature of the
+This behavior is not a bug in iperf-latency but a feature of the
 Linux kernel, as documented by
 .BR tcp ( 7 )
 and
@@ -529,7 +529,7 @@ with this flag.
 Use repeating pattern in payload, instead of random bytes.
 The same payload is used in iperf2 (ASCII '0..9' repeating).
 It might help to test and reveal problems in networking gear with hardware
-compression (including some WiFi access points), where iperf2 and iperf3
+compression (including some WiFi access points), where iperf2 and iperf-latency
 perform differently, just based on payload entropy.
 .TP
 .BR --dont-fragment
@@ -551,7 +551,7 @@ credentials
 
 .SH EXAMPLES
 .SS "Authentication - RSA Keypair"
-The authentication feature of iperf3 requires an RSA public keypair.
+The authentication feature of iperf-latency requires an RSA public keypair.
 The public key is used to encrypt the authentication token containing the
 user credentials, while the private key is used to decrypt the authentication token.
 The private key must be in PEM format and additionally must not have a
@@ -572,7 +572,7 @@ After these commands, the public key will be contained in the file
 public.pem and the private key will be contained in the file
 private_not_protected.pem.
 .SS "Authentication - Authorized users configuration file"
-A simple plaintext file must be provided to the iperf3 server in order to specify
+A simple plaintext file must be provided to the iperf-latency server in order to specify
 the authorized user credentials.
 The file is a simple list of comma-separated pairs of a username and a
 corresponding password hash.
@@ -597,7 +597,7 @@ above username and password) is given below:
 \fCmario,bf7a49a846d44b454a5d11e7acfaf13d138bbe0b7483aa3e050879700572709b\fR
 .in +.5i
 .SH AUTHORS
-A list of the contributors to iperf3 can be found within the
+A list of the contributors to iperf-latency can be found within the
 documentation located at
 \fChttps://software.es.net/iperf/dev.html#authors\fR.
 

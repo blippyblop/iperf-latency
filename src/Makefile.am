@@ -1,7 +1,7 @@
 lib_LTLIBRARIES         = libiperf.la                                   # Build and install an iperf library
-bin_PROGRAMS            = iperf3                                        # Build and install an iperf binary
+bin_PROGRAMS            = iperf-latency                                   # Build and install an iperf binary
 if ENABLE_PROFILING
-noinst_PROGRAMS         = t_timer t_units t_uuid t_api t_auth iperf3_profile   # Build, but don't install the test programs and a profiled version of iperf3
+noinst_PROGRAMS         = t_timer t_units t_uuid t_api t_auth iperf_latency_profile   # Build, but don't install the test programs and a profiled version of iperf
 else
 noinst_PROGRAMS         = t_timer t_units t_uuid t_api t_auth                  # Build, but don't install the test programs
 endif
@@ -48,21 +48,21 @@ libiperf_la_SOURCES     = \
                         version.h
 
 # Specify the sources and various flags for the iperf binary
-iperf3_SOURCES          = main.c
-iperf3_CFLAGS           = -g
-iperf3_LDADD            = libiperf.la
-iperf3_LDFLAGS          = -g
+iperf_latency_SOURCES   = main.c
+iperf_latency_CFLAGS    = -g
+iperf_latency_LDADD     = libiperf.la
+iperf_latency_LDFLAGS   = -g
 
 if ENABLE_PROFILING
 # If the iperf-profiled-binary is enabled
 # Specify the sources and various flags for the profiled iperf binary. This
 # binary recompiles all the source files to make sure they are all profiled.
-iperf3_profile_SOURCES  = main.c \
-                          $(libiperf_la_SOURCES)
+iperf_latency_profile_SOURCES  = main.c \
+                           $(libiperf_la_SOURCES)
 
-iperf3_profile_CFLAGS   = -pg -g
-iperf3_profile_LDADD    = libiperf.la
-iperf3_profile_LDFLAGS  = -pg -g
+iperf_latency_profile_CFLAGS   = -pg -g
+iperf_latency_profile_LDADD    = libiperf.la
+iperf_latency_profile_LDFLAGS  = -pg -g
 endif
 
 # Specify the sources and various flags for the test cases
@@ -101,7 +101,7 @@ TESTS                   = \
                         t_api \
 			t_auth
 
-dist_man_MANS          = iperf3.1 libiperf.3
+dist_man_MANS          = iperf-latency.1 libiperf.3
 
 install-exec-hook:
 	if test -n "$(LDCONFIG)"; then $(LDCONFIG) || true; fi

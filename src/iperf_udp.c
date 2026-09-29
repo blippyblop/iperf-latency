@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <assert.h>
+#include <math.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -51,6 +52,180 @@
 #include "timer.h"
 #include "net.h"
 #include "cjson.h"
+
+/* --------------------------- --measure-latency support ---------------------------
+ *
+ * End-to-end latency samples (in ms) for UDP packets, as measured on the
+ * receiving side: the sender stamps each packet with its own clock (see
+ * iperf_udp_send), the receiver computes the transit time on arrival and
+ * removes the clock offset obtained from the NTP-style synchronization
+ * over the TCP control channel (see iperf_clock_sync_* in iperf_api.c).
+ *
+ * Samples are kept per stream, both for the current reporting interval
+ * and for the whole test.  iperf_latency_record() may be called from the
+ * receiver thread, while the interval/total stats are taken from the main
+ * thread, so access is protected by a mutex.
+ */
+static int
+latency_float_cmp(const void *a, const void *b)
+{
+    float fa = *(const float *) a;
+    float fb = *(const float *) b;
+    return (fa > fb) - (fa < fb);
+}
+
+static void
+latency_percentile(const float *sorted, size_t n, double p, double *out)
+{
+    double rank;
+    size_t lo, hi;
+    double frac;
+
+    rank = (double) (n - 1) * p;
+    lo = (size_t) rank;
+    hi = lo + 1;
+    if (hi >= n)
+        hi = n - 1;
+    frac = rank - (double) lo;
+    *out = (double) sorted[lo] + (double) (sorted[hi] - sorted[lo]) * frac;
+}
+
+static void
+latency_compute_stats(const float *samples, size_t n, struct iperf_latency_stats *out)
+{
+    size_t i;
+    float *sorted;
+    double sum, sumsq;
+
+    out->count = (int64_t) n;
+    if (n == 0) {
+        out->min = out->max = out->mean = 0.0;
+        out->median = out->p95 = out->p99 = 0.0;
+        out->stdev = 0.0;
+        return;
+    }
+
+    sum = 0.0;
+    sumsq = 0.0;
+    out->min = samples[0];
+    out->max = samples[0];
+    for (i = 0; i < n; i++) {
+        double v = samples[i];
+        sum += v;
+        sumsq += v * v;
+        if (v < out->min)
+            out->min = v;
+        if (v > out->max)
+            out->max = v;
+    }
+    out->mean = sum / (double) n;
+    {
+        double v = sumsq / (double) n - out->mean * out->mean;
+        out->stdev = sqrt(v > 0.0 ? v : 0.0);
+    }
+
+    sorted = (float *) malloc(n * sizeof(float));
+    if (sorted != NULL) {
+        memcpy(sorted, samples, n * sizeof(float));
+        qsort(sorted, n, sizeof(float), latency_float_cmp);
+        latency_percentile(sorted, n, 0.50, &out->median);
+        latency_percentile(sorted, n, 0.95, &out->p95);
+        latency_percentile(sorted, n, 0.99, &out->p99);
+        free(sorted);
+    } else {
+        out->median = out->p95 = out->p99 = out->mean;
+    }
+}
+
+struct iperf_latency *
+iperf_latency_new(void)
+{
+    struct iperf_latency *lat;
+
+    lat = (struct iperf_latency *) calloc(1, sizeof(struct iperf_latency));
+    if (lat == NULL)
+        return NULL;
+    if (pthread_mutex_init(&lat->lock, NULL) != 0) {
+        free(lat);
+        return NULL;
+    }
+    lat->interval_cap = IPERF_LATENCY_SAMPLES_INIT;
+    lat->total_cap = IPERF_LATENCY_SAMPLES_INIT;
+    lat->interval_samples = (float *) malloc(lat->interval_cap * sizeof(float));
+    lat->total_samples = (float *) malloc(lat->total_cap * sizeof(float));
+    if (lat->interval_samples == NULL || lat->total_samples == NULL) {
+        free(lat->interval_samples);
+        free(lat->total_samples);
+        pthread_mutex_destroy(&lat->lock);
+        free(lat);
+        return NULL;
+    }
+    return lat;
+}
+
+void
+iperf_latency_free(struct iperf_latency *lat)
+{
+    if (lat == NULL)
+        return;
+    free(lat->interval_samples);
+    free(lat->total_samples);
+    pthread_mutex_destroy(&lat->lock);
+    free(lat);
+}
+
+static void
+latency_append(float **samples, size_t *count, size_t *cap, double value)
+{
+    if (*count >= *cap) {
+        size_t newcap = *cap * 2;
+        float *ns = (float *) realloc(*samples, newcap * sizeof(float));
+        if (ns == NULL)
+            return; /* drop the sample on out of memory */
+        *samples = ns;
+        *cap = newcap;
+    }
+    (*samples)[(*count)++] = (float) value;
+}
+
+void
+iperf_latency_record(struct iperf_latency *lat, double latency_ms)
+{
+    if (lat == NULL)
+        return;
+    pthread_mutex_lock(&lat->lock);
+    latency_append(&lat->total_samples, &lat->total_count, &lat->total_cap, latency_ms);
+    latency_append(&lat->interval_samples, &lat->interval_count, &lat->interval_cap, latency_ms);
+    pthread_mutex_unlock(&lat->lock);
+}
+
+void
+iperf_latency_interval_stats(struct iperf_latency *lat, struct iperf_latency_stats *out)
+{
+    if (lat == NULL) {
+        latency_compute_stats(NULL, 0, out);
+        return;
+    }
+    pthread_mutex_lock(&lat->lock);
+    if (lat->interval_count > 0)
+        latency_compute_stats(lat->interval_samples, lat->interval_count, out);
+    else
+        latency_compute_stats(NULL, 0, out);
+    lat->interval_count = 0;
+    pthread_mutex_unlock(&lat->lock);
+}
+
+void
+iperf_latency_total_stats(struct iperf_latency *lat, struct iperf_latency_stats *out)
+{
+    if (lat == NULL) {
+        latency_compute_stats(NULL, 0, out);
+        return;
+    }
+    pthread_mutex_lock(&lat->lock);
+    latency_compute_stats(lat->total_samples, lat->total_count, out);
+    pthread_mutex_unlock(&lat->lock);
+}
 
 /* iperf_udp_recv
  *
@@ -223,11 +398,24 @@ iperf_udp_recv(struct iperf_stream *sp)
 	    d = transit - sp->prev_transit;
 	    if (d < 0)
 		d = -d;
-	    sp->prev_transit = transit;
-	    sp->jitter += (d - sp->jitter) / 16.0;
-	    first_packet = 0;
+sp->prev_transit = transit;
+ 	    sp->jitter += (d - sp->jitter) / 16.0;
+ 	    first_packet = 0;
 
-	    dgram_buf += dgram_sz;
+ 	    /*
+ 	     * --measure-latency: sample the end-to-end latency of this
+ 	     * packet, removing the clock offset obtained from the
+ 	     * control-channel synchronization.  Skip samples during the
+ 	     * omit period.
+ 	     */
+if (sp->latency != NULL &&
+	        test->clock_sync != NULL && test->clock_sync->valid &&
+	        !test->omitting) {
+	        double latency_ms = (transit - test->clock_sync->offset) * 1000.0;
+	        iperf_latency_record(sp->latency, latency_ms);
+	    }
+
+ 	    dgram_buf += dgram_sz;
 	    buf_sz -= dgram_sz;
 	}
     }

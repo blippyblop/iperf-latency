@@ -60,5 +60,20 @@ int iperf_udp_connect(struct iperf_test *);
 
 int iperf_udp_init(struct iperf_test *);
 
+/**
+ * --measure-latency support (UDP only, receiving side).
+ *
+ * iperf_latency_new -- allocate a per-stream latency sample buffer
+ * iperf_latency_free -- release it
+ * iperf_latency_record -- record one end-to-end latency sample (ms)
+ * iperf_latency_interval_stats -- stats for the current interval, then reset
+ * iperf_latency_total_stats -- stats over the whole test
+ */
+struct iperf_latency *iperf_latency_new(void);
+void iperf_latency_free(struct iperf_latency *lat);
+void iperf_latency_record(struct iperf_latency *lat, double latency_ms);
+void iperf_latency_interval_stats(struct iperf_latency *lat, struct iperf_latency_stats *out);
+void iperf_latency_total_stats(struct iperf_latency *lat, struct iperf_latency_stats *out);
+
 
 #endif

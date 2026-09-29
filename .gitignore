@@ -19,8 +19,8 @@ src/Makefile
 src/iperf_config.h
 src/version.h
 src/stamp-h1
-src/iperf3
-src/iperf3_profile
+src/iperf-latency
+src/iperf_latency_profile
 src/t_timer
 src/t_units
 src/t_uuid

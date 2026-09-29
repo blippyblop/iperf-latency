@@ -91,10 +91,9 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: git file
+          install: git file make diffutils
           pacboy: >-
             toolchain:p
-            make:p
 
       - name: Configure (mingw-w64, static, no OpenSSL)
         run: |

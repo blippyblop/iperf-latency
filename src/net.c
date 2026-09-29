@@ -677,7 +677,7 @@ Nwrite(int fd, const char *buf, size_t count, int prot)
     while (nleft > 0) {
 	r = send(fd, buf, nleft, 0);   /* send(): sockets on all platforms (write() is CRT-only on Windows) */
 	if (r < 0) {
-	    switch (errno) {
+	    switch (SOCK_ERRNO) {
 		case EINTR:
 		case EAGAIN:
 #if (EAGAIN != EWOULDBLOCK)
@@ -751,7 +751,7 @@ Nwrite_gso(int fd, const char *buf, size_t count, int prot, uint16_t gso_size)
 	r = udp_sendmsg_gso(fd, buf, count, gso_size);
 
 	if (r < 0) {
-		switch (errno) {
+		switch (SOCK_ERRNO) {
 			case EINTR:
 			case EAGAIN:
 #if (EAGAIN != EWOULDBLOCK)
@@ -824,7 +824,7 @@ Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
 	errno = ENOSYS;
 #endif
 	if (r < 0) {
-	    switch (errno) {
+	    switch (SOCK_ERRNO) {
 		case EINTR:
 		case EAGAIN:
 #if (EAGAIN != EWOULDBLOCK)

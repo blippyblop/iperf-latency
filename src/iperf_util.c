@@ -29,6 +29,9 @@
  * Iperf utility functions
  *
  */
+#ifdef _WIN32
+#define _CRT_RAND_S     /* rand_s() in stdlib.h */
+#endif
 #include "iperf_config.h"
 
 #include <stdio.h>
@@ -57,6 +60,23 @@
  */
 int readentropy(void *out, size_t outsize)
 {
+#ifdef _WIN32
+    /* Windows: rand_s() uses the OS RNG (no /dev/urandom). */
+    size_t i;
+    unsigned int v;
+    if (!outsize) return 0;
+    for (i = 0; i + sizeof(v) <= outsize; i += sizeof(v)) {
+        if (rand_s(&v) != 0)
+            iperf_errexit(NULL, "error - rand_s failed to generate entropy\n");
+        memcpy((char *) out + i, &v, sizeof(v));
+    }
+    if (i < outsize) {
+        if (rand_s(&v) != 0)
+            iperf_errexit(NULL, "error - rand_s failed to generate entropy\n");
+        memcpy((char *) out + i, &v, outsize - i);
+    }
+    return 0;
+#else
     FILE *frandom;
     static const char rndfile[] = "/dev/urandom";
     int is_eof = 0;
@@ -78,6 +98,7 @@ int readentropy(void *out, size_t outsize)
     }
     fclose(frandom);
     return 0;
+#endif
 }
 
 

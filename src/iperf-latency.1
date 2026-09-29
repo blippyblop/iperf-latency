@@ -302,6 +302,27 @@ Use UDP for tests rather than TCP.
 Note that TCP communication is still used for the control connection
 between client and server.
 .TP
+.BR --measure-latency
+Measure one-way packet latency end-to-end (UDP tests only, client only).
+The sender stamps every UDP datagram with its own monotonic clock
+reading; client and server run a lightweight NTP-style clock
+synchronization over the control connection (roughly once per second
+during the test) so the receiver can convert raw transit times into
+true one-way latencies even when the two hosts' clocks differ (e.g.
+different uptimes or architectures).
+The receiving side reports min/mean/median/standard deviation/P95/P99/max
+per reporting interval and for the whole test in a "PACKET LATENCY"
+block, or, with
+.BR --json ,
+per-stream \fBlatency_*_ms\fR fields and a top-level
+\fBlatency_measurement\fR object describing synchronization quality
+(\fBclock_sync_samples\fR, \fBclock_sync_errors\fR, \fBclock_offset_ms\fR,
+\fBmin_sync_rtt_ms\fR, \fBoffset_stdev_ms\fR).
+In normal (upload) tests the server measures; with
+.BR -R ,
+the client measures. Sync quality depends on roughly symmetric path
+delay, like NTP itself. Both ends must run a build with this feature.
+.TP
 .BR --connect-timeout " \fIn\fR"
 Set timeout for establishing the initial control connection to the
 server, in milliseconds.

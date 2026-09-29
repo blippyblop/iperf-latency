@@ -42,6 +42,57 @@ Reporting security vulnerabilities: iperf@es.net
 
 Frequently Asked Questions: https://software.es.net/iperf/faq.html
 
+About this fork: `--measure-latency`
+------------------------------------
+
+This fork adds one feature to iperf3 (the binary is renamed
+`iperf-latency`): end-to-end **one-way UDP packet latency** measurement.
+
+    # server (any machine)
+    iperf-latency -s
+    # client (UDP test with latency measurement)
+    iperf-latency -c <server> -u -t 10 --measure-latency
+
+How it works:
+
+* The sender stamps every UDP datagram with its own clock reading.
+* Before/while data flows, client and server run a lightweight
+  NTP-style clock synchronization over the (TCP) control connection
+  (~1 Hz), so both sides agree on the offset between their clocks
+  even across different architectures and host uptimes.
+* The receiver computes `arrival - send - clock offset` for every
+  packet and reports min/mean/median/standard deviation/P95/P99/max
+  per interval and for the whole test:
+
+        PACKET LATENCY
+        ------------------------------------------------------------
+        Minimum:              0.060 ms
+        Average:              0.077 ms
+        ...
+
+Notes and limitations:
+
+* UDP tests only, and the flag is client-only (server use is an error).
+* Normal tests are measured on the **server**; with `-R` the client
+  measures. The final results exchange means both consoles show the
+  block. Use `--get-server-output` to see the server-side view live.
+* Clock sync quality depends on roughly symmetric path delay (same
+  assumption as NTP itself). With `--json`, check the top-level
+  `latency_measurement` object (`clock_offset_ms`, `min_sync_rtt_ms`,
+  `offset_stdev_ms`, `clock_sync_samples/errors`) to judge it.
+* Both ends must run a build with this feature (protocol messages 17/18
+  on the control channel).
+* In `-J` output each UDP stream carries `latency_min_ms`,
+  `latency_mean_ms`, `latency_median_ms`, `latency_stdev_ms`,
+  `latency_p95_ms`, `latency_p99_ms`, `latency_max_ms` and
+  `latency_samples`.
+
+Prebuilt static binaries (linux x86_64/aarch64, windows x86_64) are
+attached automatically to this fork's GitHub releases by CI
+(`.github/workflows/release.yml`); the `bin/` directory is local build
+output only and is not tracked in git. See `BUILD-NOTES.md` and
+`design.md` for design details and the full statistics description.
+
 Obtaining iperf3
 ----------------
 

@@ -873,8 +873,6 @@ Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
     return count;
 #else /* HAVE_SENDFILE */
     errno = ENOSYS;	/* error if somehow get called without HAVE_SENDFILE */
-    errno = SOCK_ERRNO;
-    fprintf(stderr, "net.c hard error: fd=%d sock_errno=%d\n", fd, (int) SOCK_ERRNO);
     return NET_HARDERROR;
 #endif /* HAVE_SENDFILE */
 }

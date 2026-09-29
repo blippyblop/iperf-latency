@@ -320,7 +320,7 @@ iperf_handle_message_client(struct iperf_test *test)
     }
 
     /*!!! Why is this read() and not Nread()? */
-    if ((rval = read(test->ctrl_sck, (char*) &state_byte, sizeof(signed char))) <= 0) {
+    if ((rval = recv(test->ctrl_sck, (char*) &state_byte, sizeof(signed char), 0)) <= 0) {   /* recv, not read: sockets on Windows */
         if (rval == 0) {
             i_errno = IECTRLCLOSE;
             return -1;

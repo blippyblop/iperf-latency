@@ -73,47 +73,61 @@ jobs:
           path: iperf-latency-linux-${{ matrix.arch }}
           if-no-files-found: error
 
-  # Best effort: the current source still needs WIN32 branches for post-3.21
-  # features (GSO/GRO, tcp_info, pacing, signals) — see BUILD-NOTES.md,
-  # "Windows — not built, why not". Until those land, this job is expected to
-  # fail; continue-on-error keeps the release going with the Linux binaries
-  # and the workflow will attach a windows exe automatically once the source
-  # builds.
+  # Native Windows build (mingw-w64 via MSYS2). The source tree carries the
+  # WIN32 port (src/windows/ shims + portable fixes); this job builds it and
+  # actually RUNS the end-to-end latency smoke test on real Windows.
   build-windows:
-    name: windows x86_64 (mingw, best effort)
-    continue-on-error: true
-    runs-on: ubuntu-24.04
+    name: windows x86_64 (mingw-w64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install mingw-w64
-        run: |
-          sudo apt-get -y update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+      - name: Set up MSYS2 / mingw-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: git file
+          pacboy: >-
+            toolchain:p
+            make:p
 
-      - name: Configure (mingw cross)
+      - name: Configure (mingw-w64, static, no OpenSSL)
         run: |
-          CC=x86_64-w64-mingw32-gcc ./configure \
-            --host=x86_64-w64-mingw32 \
-            --with-openssl=no \
-            LIBS='-lws2_32 -lwinpthread' \
-            LDFLAGS='-static'
+          ./configure --with-openssl=no --enable-static-bin --disable-dependency-tracking \
+            CPPFLAGS="-D_WIN32_WINNT=0x0601 -Isrc/windows" \
+            LDFLAGS="-static" \
+            LIBS="-lws2_32"
 
       - name: Build
-        run: make -j"$(nproc)"
-
-      - name: Stage artifact (if a binary was produced)
         run: |
-          if [ -f src/iperf-latency.exe ]; then
-            x86_64-w64-mingw32-strip src/iperf-latency.exe
-            cp src/iperf-latency.exe iperf-latency-windows-x86_64.exe
-          else
-            echo "No windows binary produced; see BUILD-NOTES.md ('Windows — not built, why not')." | tee windows-build-missing.txt
-          fi
+          make -j"$(nproc)"
+          file src/iperf-latency.exe
+          file src/iperf-latency.exe | grep -Eqi 'statically linked|static-pie' || {
+            echo "ERROR: src/iperf-latency.exe is not a static binary" >&2
+            exit 1
+          }
+
+      # Runs the real end-to-end latency path on actual Windows and fails the
+      # job on absurd values (the clock-domain bug produced ~1e8 ms constants).
+      - name: Smoke test (localhost UDP --measure-latency)
+        run: |
+          ./src/iperf-latency.exe --version
+          ./src/iperf-latency.exe -s -1 >/dev/null 2>&1 &
+          sleep 1
+          ./src/iperf-latency.exe -c 127.0.0.1 -u -t 4 --measure-latency | tee client.log
+          grep -q 'PACKET LATENCY' client.log
+          min_ms=$(awk '/^Minimum:/{print $2}' client.log | head -1)
+          awk -v v="${min_ms:-1e9}" 'BEGIN { if (v <= 0 || v >= 1000) exit 1 }'
+
+      - name: Stage artifact
+        run: cp src/iperf-latency.exe iperf-latency-windows-x86_64.exe
 
       - name: Upload build artifact
-        if: ${{ hashFiles('iperf-latency-windows-x86_64.exe') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: iperf-latency-windows-x86_64
@@ -122,7 +136,7 @@ jobs:
 
   release-upload:
     name: Attach binaries to the release
-    needs: [build-linux]
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Download linux artifacts
@@ -132,8 +146,7 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Download windows artifact (optional)
-        continue-on-error: true
+      - name: Download windows artifact
         uses: actions/download-artifact@v4
         with:
           pattern: iperf-latency-windows-*

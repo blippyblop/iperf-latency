@@ -61,7 +61,39 @@ both sides use the same host clock, so the true offset is 0); the latency
 distribution shape (stdev, min→max spread) is unaffected. On real aarch64
 hardware expect the same ~±25 µs offset error as the x86_64 runs.
 
-## Windows — not built, why not
+## Windows — built since 2026-09-29 (mingw-w64 port)
+
+Earlier attempts failed on source-level POSIX/Winsock mismatches (bare `uint`,
+typed `setsockopt` optval pointers, `O_NONBLOCK`/`fcntl`, POSIX signals,
+`getrusage`, `MSG_TRUNC`, `strsignal`/`kill`, an always-on `mmap`'d send
+buffer, missing `uname`, etc.). Those are all ported now:
+
+* `src/windows/` — POSIX-name shim headers (sys/socket.h, netdb.h, poll.h, …)
+  selected with `CPPFLAGS="-Isrc/windows"`.
+* `src/iperf_win_compat.h` — included by `iperf.h` on Windows: winsock2-first
+  include order, `close()`→`closesocket()`, Winsock→errno translation
+  (`SOCK_ERRNO`), uniform `iperf_setsockopt`/`iperf_getsockopt` wrappers
+  (Winsock wants `char*` optval), `poll()` via `WSAPoll`, `strsignal`
+  fallback, `BYTE_ORDER`, `FD_SETSIZE` bump.
+* Source fixes (all `#ifdef`'d, POSIX behavior unchanged): send buffer uses
+  `malloc` instead of `mkstemp`+`mmap`; `setnonblocking`/`timeout_connect`
+  use `ioctlsocket(FIONBIO)`; signal-blocking and `SIGPIPE` handling skipped;
+  `cpu_util` via `GetProcessTimes`; `iperf_getpass` via console mode;
+  `daemon()` unsupported (returns -1); pidfile liveness via `OpenProcess`;
+  `SO_RCVTIMEO` (Winsock units differ) not set; `TCP_MAXSEG` guarded;
+  `portable_endian.h` uses `__builtin_bswap64` for `htobe64`/`be64toh`.
+* CI: `.github/workflows/release.yml` builds it on a native `windows-latest`
+  runner (MSYS2 mingw-w64) with
+  `./configure --with-openssl=no --enable-static-bin CPPFLAGS="-D_WIN32_WINNT=0x0601 -Isrc/windows" LDFLAGS=-static LIBS=-lws2_32`
+  and runs the localhost `--measure-latency` smoke test on real Windows.
+
+Known Windows differences: GSO/GRO, TCP_INFO stats, socket pacing, CPU
+affinity (Linux mechanisms) are off; `-D/--daemon` is rejected; `--logfile`
+and `-F` diskfile modes use text-mode translation unless opened binary.
+Widely used paths (TCP/UDP throughput, `-R`, `-P`, `--measure-latency`,
+JSON) are covered by the CI smoke test.
+
+### Historical note — why it was not built before
 
 Attempted: Alpine `mingw-w64-gcc` 15.2 cross (`x86_64-w64-mingw32-*`) with
 `--host=x86_64-w64-mingw32 CC=x86_64-w64-mingw32-gcc --with-openssl=no
@@ -70,23 +102,10 @@ netinet/tcp.h, arpa/inet.h, netdb.h, sys/select.h, sys/uio.h, sys/resource.h,
 sys/utsname.h, sys/mman.h, net/if.h, termios.h stub, `Windows.h`→`windows.h`).
 That gets `configure` and most of the compile through, but the remaining
 failures are **source-level** POSIX/Winsock mismatches in this master snapshot,
-not shimmable:
-
-- `uint` type used in GSO/GRO send paths (36×) — not provided by mingw headers.
-- typed `setsockopt`/`getsockopt` argument-4 pointers (23×): Winsock declares
-  `optval` as `const char*`; new options code (GSO/GRO, tcp_info, pacing,
-  IPv6) passes typed structs with no WIN32 branch.
-- `O_NONBLOCK`/`F_GETFL`/`F_SETFL` (no Winsock equivalent; needs
-  `ioctlsocket(FIONBIO)`), `sigset_t`/`sigemptyset`/`sigaddset`, `MSG_TRUNC`,
-  `getrusage`/`struct rusage` — all used without WIN32 fallbacks.
-
-Upstream does not build or test Windows in CI (`.github/workflows/build.yml`
-covers ubuntu/macos only), so the WIN32 paths in this snapshot are stale relative
-to the post-3.21 features. Building a Windows binary would mean porting the
-newer code (GSO/GRO, pacing, tcp_info, signal handling, getpass/termios) to
-Winsock/winpthreads — out of scope here. A future Windows build is best done
-against a release branch with maintained WIN32 support (or MSVC + the project's
-historical mingw header-shim tooling) after the new features gain WIN32 branches.
+not shimmable: `uint` in GSO/GRO paths, typed `setsockopt`/`getsockopt`
+argument-4 pointers, `O_NONBLOCK`/`F_GETFL`/`F_SETFL`, `sigset_t`,
+`MSG_TRUNC`, `getrusage` — all used without WIN32 fallbacks. (All of these
+have since been fixed; see above.)
 
 ## Test evidence (x86_64 localhost, 50 Mbit/s UDP)
 

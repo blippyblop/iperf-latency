@@ -27,13 +27,19 @@
 
 #include "iperf_config.h"
 
+#ifdef _WIN32
+#include "iperf_win_compat.h"
+#endif
+
 #include <string.h>
 #include <time.h>
 #include <sys/types.h>
 /* FreeBSD needs _WITH_GETLINE to enable the getline() declaration */
 #define _WITH_GETLINE
 #include <stdio.h>
+#ifndef _WIN32
 #include <termios.h>
+#endif
 #include <inttypes.h>
 #include <stdint.h>
 
@@ -470,6 +476,53 @@ int decode_auth_setting(int enable_debug, const char *authtoken, EVP_PKEY *priva
 #endif //HAVE_SSL
 
 ssize_t iperf_getpass (char **lineptr, size_t *n, FILE *stream) {
+#ifdef _WIN32
+    /* Windows: disable echo via the console mode API. Falls back to an
+     * error on non-console input; IPERF3_PASSWORD works there. */
+    HANDLE hIn;
+    DWORD oldmode;
+    ssize_t nread;
+
+    if (stream != stdin)
+        return -1;
+    hIn = GetStdHandle(STD_INPUT_HANDLE);
+    if (hIn == INVALID_HANDLE_VALUE || !GetConsoleMode(hIn, &oldmode))
+        return -1;
+    if (!SetConsoleMode(hIn, oldmode & ~ENABLE_ECHO_INPUT))
+        return -1;
+
+    printf("Password: ");
+    fflush(stdout);
+    if (*lineptr == NULL) {
+        *n = 1024;
+        *lineptr = malloc(*n);
+        if (*lineptr == NULL) {
+            SetConsoleMode(hIn, oldmode);
+            return -1;
+        }
+    }
+    if (fgets(*lineptr, (int) *n, stream) == NULL) {
+        SetConsoleMode(hIn, oldmode);
+        return -1;
+    }
+    SetConsoleMode(hIn, oldmode);
+    printf("\n");
+    nread = (ssize_t) strlen(*lineptr);
+
+    /* strip the \n or \r\n chars */
+    {
+        char *buf = *lineptr;
+        int i;
+        for (i = 0; buf[i] != '\0'; i++) {
+            if (buf[i] == '\n' || buf[i] == '\r') {
+                buf[i] = '\0';
+                nread = i;
+                break;
+            }
+        }
+    }
+    return nread;
+#else
     struct termios old, new;
     ssize_t nread;
 
@@ -499,4 +552,5 @@ ssize_t iperf_getpass (char **lineptr, size_t *n, FILE *stream) {
     }
 
     return nread;
+#endif /* _WIN32 */
 }

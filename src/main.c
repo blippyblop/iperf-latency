@@ -57,6 +57,17 @@ main(int argc, char **argv)
 {
     struct iperf_test *test;
 
+#ifdef _WIN32
+    /* Initialize Winsock before any socket call. */
+    {
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            fprintf(stderr, "WSAStartup failed\n");
+            exit(1);
+        }
+    }
+#endif
+
     /*
      * Atomics check. We prefer to have atomic types (which is
      * basically on any compiler supporting C11 or better). If we
@@ -149,8 +160,11 @@ run(struct iperf_test *test)
     if (setjmp(sigend_jmp_buf))
 	iperf_got_sigend(test, signed_sig);
 
-    /* Ignore SIGPIPE to simplify error handling */
+    /* Ignore SIGPIPE to simplify error handling.  Not needed on Windows:
+     * writes to a closed socket return an error instead of raising a signal. */
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
 
     switch (test->role) {
         case 's':
@@ -208,7 +222,9 @@ run(struct iperf_test *test)
     }
 
     iperf_catch_sigend(SIG_DFL);
+#ifndef _WIN32
     signal(SIGPIPE, SIG_DFL);
+#endif
 
     return 0;
 }

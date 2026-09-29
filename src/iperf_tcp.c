@@ -145,7 +145,7 @@ iperf_tcp_accept(struct iperf_test * test)
 	    if (test->debug) {
 		printf("Setting fair-queue socket pacing to %"PRIu64"\n", fqrate);
 	    }
-	    if (setsockopt(s, SOL_SOCKET, SO_MAX_PACING_RATE, &fqrate, sizeof(fqrate)) < 0) {
+	    if (iperf_setsockopt(s, SOL_SOCKET, SO_MAX_PACING_RATE, &fqrate, sizeof(fqrate)) < 0) {
 		warning("Unable to set socket pacing");
 	    }
 	}
@@ -234,7 +234,7 @@ iperf_tcp_listen(struct iperf_test *test)
 
         if (test->no_delay) {
             opt = 1;
-            if (setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
+            if (iperf_setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
 		saved_errno = errno;
 		close(s);
 		freeaddrinfo(res);
@@ -245,7 +245,8 @@ iperf_tcp_listen(struct iperf_test *test)
         }
         // XXX: Setting MSS is very buggy!
         if ((opt = test->settings->mss)) {
-            if (setsockopt(s, IPPROTO_TCP, TCP_MAXSEG, &opt, sizeof(opt)) < 0) {
+#ifdef TCP_MAXSEG
+            if (iperf_setsockopt(s, IPPROTO_TCP, TCP_MAXSEG, &opt, sizeof(opt)) < 0) {
 		saved_errno = errno;
 		close(s);
 		freeaddrinfo(res);
@@ -253,9 +254,10 @@ iperf_tcp_listen(struct iperf_test *test)
                 i_errno = IESETMSS;
                 return -1;
             }
+#endif /* TCP_MAXSEG */
         }
         if ((opt = test->settings->socket_bufsize)) {
-            if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt)) < 0) {
+            if (iperf_setsockopt(s, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt)) < 0) {
 		saved_errno = errno;
 		close(s);
 		freeaddrinfo(res);
@@ -263,7 +265,7 @@ iperf_tcp_listen(struct iperf_test *test)
                 i_errno = IESETBUF;
                 return -1;
             }
-            if (setsockopt(s, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0) {
+            if (iperf_setsockopt(s, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0) {
 		saved_errno = errno;
 		close(s);
 		freeaddrinfo(res);
@@ -281,7 +283,7 @@ iperf_tcp_listen(struct iperf_test *test)
 	}
     }
         opt = 1;
-        if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
 	    saved_errno = errno;
             close(s);
 	    freeaddrinfo(res);
@@ -301,7 +303,7 @@ iperf_tcp_listen(struct iperf_test *test)
 		opt = 0;
 	    else
 		opt = 1;
-	    if (setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY,
+	    if (iperf_setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY,
 			   (char *) &opt, sizeof(opt)) < 0) {
 		saved_errno = errno;
 		close(s);
@@ -335,7 +337,7 @@ iperf_tcp_listen(struct iperf_test *test)
 
     /* Read back and verify the sender socket buffer size */
     optlen = sizeof(sndbuf_actual);
-    if (getsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf_actual, &optlen) < 0) {
+    if (iperf_getsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf_actual, &optlen) < 0) {
 	saved_errno = errno;
 	close(s);
 	errno = saved_errno;
@@ -353,7 +355,7 @@ iperf_tcp_listen(struct iperf_test *test)
 
     /* Read back and verify the receiver socket buffer size */
     optlen = sizeof(rcvbuf_actual);
-    if (getsockopt(s, SOL_SOCKET, SO_RCVBUF, &rcvbuf_actual, &optlen) < 0) {
+    if (iperf_getsockopt(s, SOL_SOCKET, SO_RCVBUF, &rcvbuf_actual, &optlen) < 0) {
 	saved_errno = errno;
 	close(s);
 	errno = saved_errno;
@@ -416,7 +418,7 @@ iperf_tcp_connect(struct iperf_test *test)
     /* Set socket options */
     if (test->no_delay) {
         opt = 1;
-        if (setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
 	    saved_errno = errno;
 	    close(s);
 	    freeaddrinfo(server_res);
@@ -426,7 +428,8 @@ iperf_tcp_connect(struct iperf_test *test)
         }
     }
     if ((opt = test->settings->mss)) {
-        if (setsockopt(s, IPPROTO_TCP, TCP_MAXSEG, &opt, sizeof(opt)) < 0) {
+#ifdef TCP_MAXSEG
+        if (iperf_setsockopt(s, IPPROTO_TCP, TCP_MAXSEG, &opt, sizeof(opt)) < 0) {
 	    saved_errno = errno;
 	    close(s);
 	    freeaddrinfo(server_res);
@@ -434,9 +437,10 @@ iperf_tcp_connect(struct iperf_test *test)
             i_errno = IESETMSS;
             return -1;
         }
+#endif /* TCP_MAXSEG */
     }
     if ((opt = test->settings->socket_bufsize)) {
-        if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(s, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt)) < 0) {
 	    saved_errno = errno;
 	    close(s);
 	    freeaddrinfo(server_res);
@@ -444,7 +448,7 @@ iperf_tcp_connect(struct iperf_test *test)
             i_errno = IESETBUF;
             return -1;
         }
-        if (setsockopt(s, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(s, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0) {
 	    saved_errno = errno;
 	    close(s);
 	    freeaddrinfo(server_res);
@@ -455,7 +459,7 @@ iperf_tcp_connect(struct iperf_test *test)
     }
 #if defined(HAVE_TCP_USER_TIMEOUT)
     if ((opt = test->settings->snd_timeout)) {
-        if (setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
 	    saved_errno = errno;
 	    close(s);
 	    freeaddrinfo(server_res);
@@ -468,7 +472,7 @@ iperf_tcp_connect(struct iperf_test *test)
 
     /* Read back and verify the sender socket buffer size */
     optlen = sizeof(sndbuf_actual);
-    if (getsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf_actual, &optlen) < 0) {
+    if (iperf_getsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf_actual, &optlen) < 0) {
 	saved_errno = errno;
 	close(s);
 	freeaddrinfo(server_res);
@@ -488,7 +492,7 @@ iperf_tcp_connect(struct iperf_test *test)
 
     /* Read back and verify the receiver socket buffer size */
     optlen = sizeof(rcvbuf_actual);
-    if (getsockopt(s, SOL_SOCKET, SO_RCVBUF, &rcvbuf_actual, &optlen) < 0) {
+    if (iperf_getsockopt(s, SOL_SOCKET, SO_RCVBUF, &rcvbuf_actual, &optlen) < 0) {
 	saved_errno = errno;
 	close(s);
 	freeaddrinfo(server_res);
@@ -545,7 +549,7 @@ iperf_tcp_connect(struct iperf_test *test)
             freq->flr_share = IPV6_FL_S_ANY;
             memcpy(&freq->flr_dst, &sa6P->sin6_addr, 16);
 
-            if (setsockopt(s, IPPROTO_IPV6, IPV6_FLOWLABEL_MGR, freq, freq_len) < 0) {
+            if (iperf_setsockopt(s, IPPROTO_IPV6, IPV6_FLOWLABEL_MGR, freq, freq_len) < 0) {
 		saved_errno = errno;
                 close(s);
                 freeaddrinfo(server_res);
@@ -556,7 +560,7 @@ iperf_tcp_connect(struct iperf_test *test)
             sa6P->sin6_flowinfo = freq->flr_label;
 
             opt = 1;
-            if (setsockopt(s, IPPROTO_IPV6, IPV6_FLOWINFO_SEND, &opt, sizeof(opt)) < 0) {
+            if (iperf_setsockopt(s, IPPROTO_IPV6, IPV6_FLOWINFO_SEND, &opt, sizeof(opt)) < 0) {
 		saved_errno = errno;
                 close(s);
                 freeaddrinfo(server_res);
@@ -577,7 +581,7 @@ iperf_tcp_connect(struct iperf_test *test)
 	    if (test->debug) {
 		printf("Setting fair-queue socket pacing to %"PRIu64"\n", fqrate);
 	    }
-	    if (setsockopt(s, SOL_SOCKET, SO_MAX_PACING_RATE, &fqrate, sizeof(fqrate)) < 0) {
+	    if (iperf_setsockopt(s, SOL_SOCKET, SO_MAX_PACING_RATE, &fqrate, sizeof(fqrate)) < 0) {
 		warning("Unable to set socket pacing");
 	    }
 	}
@@ -602,7 +606,7 @@ iperf_tcp_connect(struct iperf_test *test)
     }
 
     if (timeout_connect(s, (struct sockaddr *) server_res->ai_addr, server_res->ai_addrlen,
-                        DEFAULT_NO_MSG_RCVD_TIMEOUT) < 0 && errno != EINPROGRESS) {
+                        DEFAULT_NO_MSG_RCVD_TIMEOUT) < 0 && SOCK_ERRNO != EINPROGRESS) {
 	saved_errno = errno;
 	close(s);
 	freeaddrinfo(server_res);

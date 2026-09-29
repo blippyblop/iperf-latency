@@ -29,6 +29,10 @@
 
 #include "iperf_config.h"
 
+#ifdef _WIN32
+#include "iperf_win_compat.h"   /* winsock2 first, errno mapping, close->closesocket */
+#endif
+
 #include <sys/time.h>
 #include <sys/types.h>
 #include <stdint.h>
@@ -54,6 +58,26 @@
 #include "queue.h"
 #include "cjson.h"
 #include "iperf_time.h"
+
+/* Uniform setsockopt/getsockopt wrappers: Winsock wants char* optval,
+ * POSIX wants void*.  All call sites use these (see the win32 port). */
+#ifdef _WIN32
+#define iperf_setsockopt iperf_setsockopt_w32
+#define iperf_getsockopt iperf_getsockopt_w32
+#define SOCK_ERRNO iperf_sock_errno_()   /* from iperf_win_compat.h */
+#else
+static __inline int
+iperf_setsockopt(int s, int level, int optname, const void *optval, socklen_t optlen)
+{
+    return setsockopt(s, level, optname, optval, optlen);
+}
+static __inline int
+iperf_getsockopt(int s, int level, int optname, void *optval, socklen_t *optlen)
+{
+    return getsockopt(s, level, optname, optval, optlen);
+}
+#define SOCK_ERRNO errno
+#endif
 #include "portable_endian.h"
 
 #if defined(HAVE_SSL)
@@ -82,6 +106,11 @@ typedef atomic_uint_fast64_t atomic_iperf_size_t;
 #if (defined(__vxworks)) || (defined(__VXWORKS__))
 typedef unsigned int uint
 #endif // __vxworks or __VXWORKS__
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+/* mingw's sys/types.h does not provide the BSD `uint` typedef. */
+typedef unsigned int uint;
+#endif
 
 struct iperf_sctp_info
 {

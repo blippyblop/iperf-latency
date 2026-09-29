@@ -58,6 +58,7 @@ iperf_client_worker_run(void *s) {
     struct iperf_test *test = sp->test;
 
     /* Blocking signal to make sure that signal will be handled by main thread */
+#ifndef _WIN32
     sigset_t set;
     sigemptyset(&set);
 #ifdef SIGTERM
@@ -73,6 +74,7 @@ iperf_client_worker_run(void *s) {
 	    i_errno = IEPTHREADSIGMASK;
 	    goto cleanup_and_fail;
     }
+#endif /* !_WIN32 */
 
     /* Allow this thread to be cancelled even if it's in a syscall */
     pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
@@ -128,7 +130,7 @@ iperf_create_streams(struct iperf_test *test, int sender)
 #if defined(HAVE_TCP_CONGESTION)
 	if (test->protocol->id == Ptcp) {
 	    if (test->congestion) {
-		if (setsockopt(s, IPPROTO_TCP, TCP_CONGESTION, test->congestion, strlen(test->congestion)) < 0) {
+		if (iperf_setsockopt(s, IPPROTO_TCP, TCP_CONGESTION, test->congestion, strlen(test->congestion)) < 0) {
 		    saved_errno = errno;
 		    close(s);
 		    errno = saved_errno;
@@ -140,7 +142,7 @@ iperf_create_streams(struct iperf_test *test, int sender)
 		socklen_t len = TCP_CA_NAME_MAX;
 		char ca[TCP_CA_NAME_MAX + 1];
                 int rc;
-		rc = getsockopt(s, IPPROTO_TCP, TCP_CONGESTION, ca, &len);
+		rc = iperf_getsockopt(s, IPPROTO_TCP, TCP_CONGESTION, ca, &len);
                 if (rc < 0 && test->congestion) {
 		    saved_errno = errno;
 		    close(s);
@@ -454,7 +456,7 @@ iperf_connect(struct iperf_test *test)
 
     // set TCP_NODELAY for lower latency on control messages
     int flag = 1;
-    if (setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int))) {
+    if (iperf_setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int))) {
         i_errno = IESETNODELAY;
         return -1;
     }
@@ -467,7 +469,7 @@ iperf_connect(struct iperf_test *test)
 
 #if defined(HAVE_TCP_USER_TIMEOUT)
     if ((opt = test->settings->snd_timeout)) {
-        if (setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
             i_errno = IESETUSERTIMEOUT;
             return -1;
         }
@@ -483,10 +485,14 @@ iperf_connect(struct iperf_test *test)
     if (test->ctrl_sck > test->max_fd) test->max_fd = test->ctrl_sck;
 
     len = sizeof(opt);
-    if (getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_MAXSEG, &opt, &len) < 0) {
+#ifdef TCP_MAXSEG
+    if (iperf_getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_MAXSEG, &opt, &len) < 0) {
         test->ctrl_sck_mss = 0;
     }
     else {
+#else
+    {
+#endif
         if (opt > 0 && opt <= MAX_UDP_BLOCKSIZE) {
             test->ctrl_sck_mss = opt;
         }
@@ -701,7 +707,7 @@ iperf_run_client(struct iperf_test * test)
 #else
 	result = select(test->max_fd + 1, &read_set, &write_set, NULL, timeout);
 #endif // __vxworks or __VXWORKS__
-	if (result < 0 && errno != EINTR) {
+	if (result < 0 && SOCK_ERRNO != EINTR) {
   	    i_errno = IESELECT;
 	    goto cleanup_and_fail;
         } else if (result == 0 && test->state == TEST_RUNNING && rcv_timeout_us > 0) {

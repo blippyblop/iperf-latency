@@ -39,6 +39,7 @@ libiperf_la_SOURCES     = \
                         net.c \
                         net.h \
                         portable_endian.h \
+			iperf_win_compat.h \
                         queue.h \
                         tcp_info.c \
                         timer.c \

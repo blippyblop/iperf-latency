@@ -191,6 +191,42 @@ timeval_diff(struct timeval * tv0, struct timeval * tv1)
 void
 cpu_util(double pcpu[3])
 {
+#ifdef _WIN32
+    /* Windows: process CPU times via GetProcessTimes. */
+    static struct iperf_time last;
+    static clock_t clast;
+    static ULONGLONG ulast_user, ulast_sys;
+    struct iperf_time now, temp_time;
+    clock_t ctemp;
+    FILETIME ftc, fte, ftk, ftu;
+    ULONGLONG utemp_user, utemp_sys;
+    double timediff, userdiff, systemdiff;
+
+    if (pcpu == NULL) {
+        iperf_time_now(&last);
+        clast = clock();
+        GetProcessTimes(GetCurrentProcess(), &ftc, &fte, &ftk, &ftu);
+        ulast_user = ((ULONGLONG) ftu.dwHighDateTime << 32) | ftu.dwLowDateTime;
+        ulast_sys = ((ULONGLONG) ftk.dwHighDateTime << 32) | ftk.dwLowDateTime;
+        return;
+    }
+
+    iperf_time_now(&now);
+    ctemp = clock();
+    GetProcessTimes(GetCurrentProcess(), &ftc, &fte, &ftk, &ftu);
+    utemp_user = ((ULONGLONG) ftu.dwHighDateTime << 32) | ftu.dwLowDateTime;
+    utemp_sys = ((ULONGLONG) ftk.dwHighDateTime << 32) | ftk.dwLowDateTime;
+
+    iperf_time_diff(&now, &last, &temp_time);
+    timediff = iperf_time_in_usecs(&temp_time);
+
+    userdiff = (double) (utemp_user / 10) - (double) (ulast_user / 10);   /* 100ns -> us */
+    systemdiff = (double) (utemp_sys / 10) - (double) (ulast_sys / 10);
+
+    pcpu[0] = (((ctemp - clast) * 1000000.0 / CLOCKS_PER_SEC) / timediff) * 100;
+    pcpu[1] = (userdiff / timediff) * 100;
+    pcpu[2] = (systemdiff / timediff) * 100;
+#else
     static struct iperf_time last;
     static clock_t clast;
     static struct rusage rlast;
@@ -223,19 +259,38 @@ cpu_util(double pcpu[3])
     pcpu[0] = (((ctemp - clast) * 1000000.0 / CLOCKS_PER_SEC) / timediff) * 100;
     pcpu[1] = (userdiff / timediff) * 100;
     pcpu[2] = (systemdiff / timediff) * 100;
+#endif
 }
 
 const char *
 get_system_info(void)
 {
     static char buf[1024];
-    struct utsname  uts;
 
     memset(buf, 0, 1024);
-    uname(&uts);
-
-    snprintf(buf, sizeof(buf), "%s %s %s %s %s", uts.sysname, uts.nodename,
-	     uts.release, uts.version, uts.machine);
+#ifdef _WIN32
+    {
+        OSVERSIONINFOA vi;
+        char hostname[256];
+        DWORD sz = sizeof(hostname);
+        vi.dwOSVersionInfoSize = sizeof(vi);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        GetVersionExA(&vi);
+#pragma GCC diagnostic pop
+        if (GetComputerNameA(hostname, &sz) == 0)
+            snprintf(hostname, sizeof(hostname), "windows");
+        snprintf(buf, sizeof(buf), "Windows %ld.%ld %s", (long) vi.dwMajorVersion,
+                 (long) vi.dwMinorVersion, hostname);
+    }
+#else
+    {
+        struct utsname  uts;
+        uname(&uts);
+        snprintf(buf, sizeof(buf), "%s %s %s %s %s", uts.sysname, uts.nodename,
+                 uts.release, uts.version, uts.machine);
+    }
+#endif
 
     return buf;
 }
@@ -505,6 +560,12 @@ iperf_dump_fdset(FILE *fp, const char *str, int nfds, fd_set *fds)
 #ifndef HAVE_DAEMON
 int daemon(int nochdir, int noclose)
 {
+#ifdef _WIN32
+    /* No fork()/setsid() on Windows; daemonizing is unsupported. */
+    (void) nochdir;
+    (void) noclose;
+    return -1;
+#else
     pid_t pid = 0;
     pid_t sid = 0;
     int fd;
@@ -554,10 +615,11 @@ int daemon(int nochdir, int noclose)
 	dup2(fd, STDOUT_FILENO);
 	dup2(fd, STDERR_FILENO);
 	if (fd > 2) {
-	    close(fd);
+	    _close(fd);
 	}
     }
     return (0);
+#endif /* _WIN32 */
 }
 #endif /* HAVE_DAEMON */
 

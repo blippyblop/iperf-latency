@@ -38,6 +38,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #if defined(HAVE_UDP_SEGMENT) || defined(HAVE_UDP_GRO)
 #include <linux/udp.h>
 #endif
@@ -97,30 +98,52 @@ timeout_connect(int s, const struct sockaddr *name, socklen_t namelen,
 
 	flags = 0;
 	if (timeout != -1) {
+#ifdef _WIN32
+		u_long nonblocking = 1;
+		if (ioctlsocket(s, FIONBIO, &nonblocking) == SOCKET_ERROR)
+			return -1;
+#else
 		flags = fcntl(s, F_GETFL, 0);
 		if (fcntl(s, F_SETFL, flags | O_NONBLOCK) == -1)
 			return -1;
+#endif
 	}
 
-	if ((ret = connect(s, name, namelen)) != 0 && errno == EINPROGRESS) {
+	if ((ret = connect(s, name, namelen)) != 0 && SOCK_ERRNO == EINPROGRESS) {
 		pfd.fd = s;
 		pfd.events = POLLOUT;
 		if ((ret = poll(&pfd, 1, timeout)) == 1) {
 			optlen = sizeof(optval);
-			if ((ret = getsockopt(s, SOL_SOCKET, SO_ERROR,
+			if ((ret = iperf_getsockopt(s, SOL_SOCKET, SO_ERROR,
 			    &optval, &optlen)) == 0) {
+#ifdef _WIN32
+				WSASetLastError(optval);
+#else
 				errno = optval;
+#endif
 				ret = optval == 0 ? 0 : -1;
 			}
 		} else if (ret == 0) {
+#ifdef _WIN32
+			WSASetLastError(WSAETIMEDOUT);
+#else
 			errno = ETIMEDOUT;
+#endif
 			ret = -1;
 		} else
 			ret = -1;
 	}
 
-	if (timeout != -1 && fcntl(s, F_SETFL, flags) == -1)
-		ret = -1;
+	if (timeout != -1) {
+#ifdef _WIN32
+		u_long blocking = 0;
+		if (ioctlsocket(s, FIONBIO, &blocking) == SOCKET_ERROR)
+			ret = -1;
+#else
+		if (fcntl(s, F_SETFL, flags) == -1)
+			ret = -1;
+#endif
+	}
 
 	return (ret);
 }
@@ -133,7 +156,7 @@ int
 bind_to_device(int s, int domain, const char *bind_dev)
 {
 #if defined(HAVE_SO_BINDTODEVICE)
-    return setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, bind_dev, IFNAMSIZ);
+    return iperf_setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, bind_dev, IFNAMSIZ);
 #elif defined(HAVE_IP_BOUND_IF)
     int opt;
     switch (domain) {
@@ -151,7 +174,7 @@ bind_to_device(int s, int domain, const char *bind_dev)
     if (index == 0) {
         return -1;
     }
-    return setsockopt(s, domain, opt, &index, sizeof(index));
+    return iperf_setsockopt(s, domain, opt, &index, sizeof(index));
 #else
     errno = ENOTSUP;
     return -1;
@@ -275,7 +298,7 @@ netdial(int domain, int proto, const char *local, const char *bind_dev, int loca
       return -1;
     }
 
-    if (timeout_connect(s, (struct sockaddr *) server_res->ai_addr, server_res->ai_addrlen, timeout) < 0 && errno != EINPROGRESS) {
+    if (timeout_connect(s, (struct sockaddr *) server_res->ai_addr, server_res->ai_addrlen, timeout) < 0 && SOCK_ERRNO != EINPROGRESS) {
 	saved_errno = errno;
 	close(s);
 	freeaddrinfo(server_res);
@@ -329,7 +352,7 @@ netannounce(int domain, int proto, const char *local, const char *bind_dev, int 
 
     if (bind_dev) {
 #if defined(HAVE_SO_BINDTODEVICE)
-        if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE,
+        if (iperf_setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE,
                        bind_dev, IFNAMSIZ) < 0)
 #endif // HAVE_SO_BINDTODEVICE
         {
@@ -342,7 +365,7 @@ netannounce(int domain, int proto, const char *local, const char *bind_dev, int 
     }
 
     opt = 1;
-    if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
+    if (iperf_setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
 		   (char *) &opt, sizeof(opt)) < 0) {
 	saved_errno = errno;
 	close(s);
@@ -364,7 +387,7 @@ netannounce(int domain, int proto, const char *local, const char *bind_dev, int 
 	    opt = 0;
 	else
 	    opt = 1;
-	if (setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY,
+	if (iperf_setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY,
 		       (char *) &opt, sizeof(opt)) < 0) {
 	    saved_errno = errno;
 	    close(s);
@@ -451,7 +474,7 @@ Nrecv(int fd, char *buf, size_t count, int prot, int sock_opt)
 
         if (r < 0) {
             /* XXX EWOULDBLOCK can't happen without non-blocking sockets */
-            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+            if (SOCK_ERRNO == EINTR || SOCK_ERRNO == EAGAIN || SOCK_ERRNO == EWOULDBLOCK)
                 break;
             else
                 return NET_HARDERROR;
@@ -530,7 +553,7 @@ Nrecv_no_select(int fd, char *buf, size_t count, int prot, int sock_opt)
 
         if (r < 0) {
             /* XXX EWOULDBLOCK can't happen without non-blocking sockets */
-            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+            if (SOCK_ERRNO == EINTR || SOCK_ERRNO == EAGAIN || SOCK_ERRNO == EWOULDBLOCK)
                 break;
             else
                 return NET_HARDERROR;
@@ -617,7 +640,7 @@ Nread_gro(int fd, char *buf, size_t count, int prot, int *dgram_sz)
 	r = recv_msg_gro(fd, buf, count, dgram_sz);
 
 	if (r < 0) {
-		if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+		if (SOCK_ERRNO == EINTR || SOCK_ERRNO == EAGAIN || SOCK_ERRNO == EWOULDBLOCK) {
 			return 0;
 		} else {
 			return NET_HARDERROR;
@@ -837,6 +860,14 @@ Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
 int
 setnonblocking(int fd, int nonblocking)
 {
+#ifdef _WIN32
+    u_long mode = nonblocking ? 1 : 0;
+    if (ioctlsocket(fd, FIONBIO, &mode) == SOCKET_ERROR) {
+        perror("ioctlsocket(FIONBIO)");
+        return -1;
+    }
+    return 0;
+#else
     int flags, newflags;
 
     flags = fcntl(fd, F_GETFL, 0);
@@ -854,6 +885,7 @@ setnonblocking(int fd, int nonblocking)
 	    return -1;
 	}
     return 0;
+#endif
 }
 
 /****************************************************************************/

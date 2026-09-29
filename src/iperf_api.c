@@ -69,7 +69,7 @@
 #endif /* __CYGWIN__, _WIN32, _WIN64, __WINDOWS__ */
 
 #if defined(HAVE_SETPROCESSAFFINITYMASK)
-#include <Windows.h>
+#include <windows.h>
 #endif /* HAVE_SETPROCESSAFFINITYMASK */
 
 #include "net.h"
@@ -5477,13 +5477,21 @@ iperf_free_stream(struct iperf_stream *sp)
     struct iperf_interval_results *irp, *nirp;
 
     /* XXX: need to free interval list too! */
+#ifdef _WIN32
+    free(sp->buffer);
+#else
     munmap(sp->buffer, sp->test->settings->blksize);
+#endif
     if (sp->buffer_fd >= 0) {
         close(sp->buffer_fd);
         sp->buffer_fd = -1;
     }
     if (sp->diskfile_fd >= 0)
+#ifdef _WIN32
+	_close(sp->diskfile_fd);
+#else
 	close(sp->diskfile_fd);
+#endif
     for (irp = TAILQ_FIRST(&sp->result->interval_results); irp != NULL; irp = nirp) {
         nirp = TAILQ_NEXT(irp, irlistentries);
         free(irp);
@@ -5549,6 +5557,23 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
     TAILQ_INIT(&sp->result->interval_results);
 
     /* Create and randomize the buffer */
+#ifdef _WIN32
+    /* Windows: plain malloc; the POSIX path uses an anonymous temp-file
+     * mapping, which has no clean portable equivalent here. */
+    sp->buffer_fd = -1;
+    size = test->settings->blksize;
+    if (test->protocol->id == Pudp && test->settings->gso && (size < test->settings->gso_bf_size))
+        size = test->settings->gso_bf_size;
+    if (test->protocol->id == Pudp && test->settings->gro && (size < test->settings->gro_bf_size))
+        size = test->settings->gro_bf_size;
+    if (sp->test->debug)
+        printf("Buffer %d bytes\n", size);
+    sp->buffer = (char *) malloc(size);
+    if (sp->buffer == NULL) {
+        i_errno = IECREATESTREAM;
+        goto err_exit_free_result;
+    }
+#else
     sp->buffer_fd = mkstemp(template);
     if (sp->buffer_fd == -1) {
         i_errno = IECREATESTREAM;
@@ -5574,6 +5599,7 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
         i_errno = IECREATESTREAM;
         goto err_exit_close_buffer;
     }
+#endif
     sp->pending_size = 0;
 
     /* Set socket */
@@ -5611,10 +5637,18 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
 err_exit_close_diskfile:
     /* The file may not be open because it depends on user given -F option. */
     if (sp->diskfile_fd >= 0) {
+#ifdef _WIN32
+        _close(sp->diskfile_fd);
+#else
         close(sp->diskfile_fd);
+#endif
     }
 err_exit_munmap_buffer:
+#ifdef _WIN32
+    free(sp->buffer);
+#else
     munmap(sp->buffer, sp->test->settings->blksize);
+#endif
 err_exit_close_buffer:
     close(sp->buffer_fd);
 err_exit_free_result:
@@ -5635,7 +5669,7 @@ iperf_common_sockopts(struct iperf_test *test, int s)
     if ((opt = test->settings->tos)) {
 	if (getsockdomain(s) == AF_INET6) {
 #ifdef IPV6_TCLASS
-	    if (setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &opt, sizeof(opt)) < 0) {
+	    if (iperf_setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &opt, sizeof(opt)) < 0) {
                 i_errno = IESETCOS;
                 return -1;
             }
@@ -5643,7 +5677,7 @@ iperf_common_sockopts(struct iperf_test *test, int s)
 	    /* if the control connection was established with a mapped v4 address
 	       then set IP_TOS on v6 stream socket as well */
 	    if (iperf_get_mapped_v4(test)) {
-		if (setsockopt(s, IPPROTO_IP, IP_TOS, &opt, sizeof(opt)) < 0) {
+		if (iperf_setsockopt(s, IPPROTO_IP, IP_TOS, &opt, sizeof(opt)) < 0) {
                     /* ignore any failure of v4 TOS in IPv6 case */
                 }
             }
@@ -5652,7 +5686,7 @@ iperf_common_sockopts(struct iperf_test *test, int s)
             return -1;
 #endif
         } else {
-            if (setsockopt(s, IPPROTO_IP, IP_TOS, &opt, sizeof(opt)) < 0) {
+            if (iperf_setsockopt(s, IPPROTO_IP, IP_TOS, &opt, sizeof(opt)) < 0) {
                 i_errno = IESETTOS;
                 return -1;
             }
@@ -5692,21 +5726,21 @@ iperf_init_stream(struct iperf_stream *sp, struct iperf_test *test)
          */
 #if defined(IP_MTU_DISCOVER) /* Linux version of IP_DONTFRAG */
         opt = IP_PMTUDISC_DO;
-        if (setsockopt(sp->socket, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(sp->socket, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) < 0) {
             i_errno = IESETDONTFRAGMENT;
             return -1;
         }
 #else
 #if defined(IP_DONTFRAG) /* UNIX does IP_DONTFRAG */
         opt = 1;
-        if (setsockopt(sp->socket, IPPROTO_IP, IP_DONTFRAG, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(sp->socket, IPPROTO_IP, IP_DONTFRAG, &opt, sizeof(opt)) < 0) {
             i_errno = IESETDONTFRAGMENT;
             return -1;
         }
 #else
 #if defined(IP_DONTFRAGMENT) /* Windows does IP_DONTFRAGMENT */
         opt = 1;
-        if (setsockopt(sp->socket, IPPROTO_IP, IP_DONTFRAGMENT, &opt, sizeof(opt)) < 0) {
+        if (iperf_setsockopt(sp->socket, IPPROTO_IP, IP_DONTFRAGMENT, &opt, sizeof(opt)) < 0) {
             i_errno = IESETDONTFRAGMENT;
             return -1;
         }
@@ -5926,6 +5960,15 @@ iperf_create_pidfile(struct iperf_test *test)
 		if (pid > 0) {
 
 		    /* See if the process exists. */
+#ifdef _WIN32
+		    HANDLE hp;
+		    int pid_exists_;
+		    hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) pid);
+		    pid_exists_ = (hp != NULL);
+		    if (hp != NULL)
+			CloseHandle(hp);
+		    if (pid_exists_) {
+#else
 #if (defined(__vxworks)) || (defined(__VXWORKS__))
 #if (defined(_WRS_KERNEL)) && (defined(_WRS_CONFIG_LP64))
 			if (kill((_Vx_TASK_ID)pid, 0) == 0) {
@@ -5935,6 +5978,7 @@ iperf_create_pidfile(struct iperf_test *test)
 #else
 		    if (kill(pid, 0) == 0) {
 #endif // __vxworks or __VXWORKS__
+#endif // _WIN32
 			/*
 			 * Make sure not to try to delete existing PID file by
 			 * scribbling over the pathname we'd use to refer to it.
@@ -5946,7 +5990,11 @@ iperf_create_pidfile(struct iperf_test *test)
 		    }
 		}
 	    }
+#ifdef _WIN32
+        (void)_close(fd);
+#else
         (void)close(fd);
+#endif
 	}
 
 	/*
@@ -6301,7 +6349,7 @@ iperf_set_control_keepalive(struct iperf_test *test)
     if (test->settings->cntl_ka) {
         // Set keepalive using system defaults
         opt = 1;
-        if (setsockopt(test->ctrl_sck, SOL_SOCKET, SO_KEEPALIVE, (char *) &opt, sizeof(opt))) {
+        if (iperf_setsockopt(test->ctrl_sck, SOL_SOCKET, SO_KEEPALIVE, (char *) &opt, sizeof(opt))) {
             i_errno = IESETCNTLKA;
             return -1;
         }
@@ -6309,21 +6357,21 @@ iperf_set_control_keepalive(struct iperf_test *test)
         // Get default values when not specified
         if ((kaidle = test->settings->cntl_ka_keepidle) == 0) {
             len = sizeof(kaidle);
-            if (getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &kaidle, &len)) {
+            if (iperf_getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &kaidle, &len)) {
                 i_errno = IESETCNTLKAINTERVAL;
                 return -1;
             }
         }
         if ((kainterval = test->settings->cntl_ka_interval) == 0) {
             len = sizeof(kainterval);
-            if (getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPINTVL, (char *) &kainterval, &len)) {
+            if (iperf_getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPINTVL, (char *) &kainterval, &len)) {
                 i_errno = IESETCNTLKAINTERVAL;
                 return -1;
             }
         }
         if ((kacount = test->settings->cntl_ka_count) == 0) {
             len = sizeof(kacount);
-            if (getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPCNT, (char *) &kacount, &len)) {
+            if (iperf_getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPCNT, (char *) &kacount, &len)) {
                 i_errno = IESETCNTLKACOUNT;
                 return -1;
             }
@@ -6341,19 +6389,19 @@ iperf_set_control_keepalive(struct iperf_test *test)
 
         // Set keep alive values when specified
         if ((opt = test->settings->cntl_ka_keepidle)) {
-            if (setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &opt, sizeof(opt))) {
+            if (iperf_setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &opt, sizeof(opt))) {
                 i_errno = IESETCNTLKAKEEPIDLE;
                 return -1;
             }
         }
         if ((opt = test->settings->cntl_ka_interval)) {
-            if (setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPINTVL, (char *) &opt, sizeof(opt))) {
+            if (iperf_setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPINTVL, (char *) &opt, sizeof(opt))) {
                 i_errno = IESETCNTLKAINTERVAL;
                 return -1;
             }
         }
         if ((opt = test->settings->cntl_ka_count)) {
-            if (setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPCNT, (char *) &opt, sizeof(opt))) {
+            if (iperf_setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_KEEPCNT, (char *) &opt, sizeof(opt))) {
                 i_errno = IESETCNTLKACOUNT;
                 return -1;
             }

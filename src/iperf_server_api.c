@@ -71,6 +71,7 @@ iperf_server_worker_run(void *s) {
     struct iperf_test *test = sp->test;
 
     /* Blocking signal to make sure that signal will be handled by main thread */
+#ifndef _WIN32
     sigset_t set;
     sigemptyset(&set);
 #ifdef SIGTERM
@@ -86,6 +87,7 @@ iperf_server_worker_run(void *s) {
 	    i_errno = IEPTHREADSIGMASK;
 	    goto cleanup_and_fail;
     }
+#endif /* !_WIN32 */
 
     /* Allow this thread to be cancelled even if it's in a syscall */
     pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
@@ -114,7 +116,7 @@ iperf_server_listen(struct iperf_test *test)
 {
     retry:
     if((test->listener = netannounce(test->settings->domain, Ptcp, test->bind_address, test->bind_dev, test->server_port)) < 0) {
-	if (errno == EAFNOSUPPORT && (test->settings->domain == AF_INET6 || test->settings->domain == AF_UNSPEC)) {
+	if (SOCK_ERRNO == EAFNOSUPPORT && (test->settings->domain == AF_INET6 || test->settings->domain == AF_UNSPEC)) {
 	    /* If we get "Address family not supported by protocol", that
 	    ** probably means we were compiled with IPv6 but the running
 	    ** kernel does not actually do IPv6.  This is not too unusual,
@@ -169,7 +171,7 @@ iperf_accept(struct iperf_test *test)
         test->ctrl_sck = s;
         // set TCP_NODELAY for lower latency on control messages
         int flag = 1;
-        if (setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int))) {
+        if (iperf_setsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int))) {
             i_errno = IESETNODELAY;
             goto error_handling;
         }
@@ -177,7 +179,7 @@ iperf_accept(struct iperf_test *test)
 #if defined(HAVE_TCP_USER_TIMEOUT)
         int opt;
         if ((opt = test->settings->snd_timeout)) {
-            if (setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
+            if (iperf_setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
                 i_errno = IESETUSERTIMEOUT;
                 goto error_handling;
             }
@@ -688,7 +690,7 @@ iperf_run_server(struct iperf_test *test)
         }
 
         result = select(test->max_fd + 1, &read_set, &write_set, NULL, timeout);
-        if (result < 0 && errno != EINTR) {
+        if (result < 0 && SOCK_ERRNO != EINTR) {
             cleanup_server(test);
             i_errno = IESELECT;
             return -1;
@@ -799,7 +801,7 @@ iperf_run_server(struct iperf_test *test)
 		    if (test->protocol->id == Ptcp) {
                         int opt;
                         if ((opt = test->settings->snd_timeout)) {
-                            if (setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
+                            if (iperf_setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &opt, sizeof(opt)) < 0) {
                                 saved_errno = errno;
                                 close(s);
                                 cleanup_server(test);
@@ -814,7 +816,7 @@ iperf_run_server(struct iperf_test *test)
 #if defined(HAVE_TCP_CONGESTION)
 		    if (test->protocol->id == Ptcp) {
 			if (test->congestion) {
-			    if (setsockopt(s, IPPROTO_TCP, TCP_CONGESTION, test->congestion, strlen(test->congestion)) < 0) {
+			    if (iperf_setsockopt(s, IPPROTO_TCP, TCP_CONGESTION, test->congestion, strlen(test->congestion)) < 0) {
 				/*
 				 * ENOENT means we tried to set the
 				 * congestion algorithm but the algorithm
@@ -824,7 +826,7 @@ iperf_run_server(struct iperf_test *test)
 				 * case, print a warning, but otherwise
 				 * continue.
 				 */
-				if (errno == ENOENT) {
+				if (SOCK_ERRNO == ENOENT) {
 				    warning("TCP congestion control algorithm not supported");
 				}
 				else {
@@ -841,7 +843,7 @@ iperf_run_server(struct iperf_test *test)
 			    socklen_t len = TCP_CA_NAME_MAX;
 			    char ca[TCP_CA_NAME_MAX + 1];
                             int rc;
-			    rc = getsockopt(s, IPPROTO_TCP, TCP_CONGESTION, ca, &len);
+			    rc = iperf_getsockopt(s, IPPROTO_TCP, TCP_CONGESTION, ca, &len);
                             if (rc < 0 && test->congestion) {
 				saved_errno = errno;
 				close(s);

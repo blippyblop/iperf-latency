@@ -470,7 +470,7 @@ Nrecv(int fd, char *buf, size_t count, int prot, int sock_opt)
         if (sock_opt)
             r = recv(fd, buf, nleft, sock_opt);
         else
-            r = read(fd, buf, nleft);
+            r = recv(fd, buf, nleft, 0);    /* recv(): sockets on all platforms */
 
         if (r < 0) {
             /* XXX EWOULDBLOCK can't happen without non-blocking sockets */
@@ -549,7 +549,7 @@ Nrecv_no_select(int fd, char *buf, size_t count, int prot, int sock_opt)
         if (sock_opt)
             r = recv(fd, buf, nleft, sock_opt);
         else
-            r = read(fd, buf, nleft);
+            r = recv(fd, buf, nleft, 0);    /* recv(): sockets on all platforms */
 
         if (r < 0) {
             /* XXX EWOULDBLOCK can't happen without non-blocking sockets */
@@ -675,7 +675,7 @@ Nwrite(int fd, const char *buf, size_t count, int prot)
     register size_t nleft = count;
 
     while (nleft > 0) {
-	r = write(fd, buf, nleft);
+	r = send(fd, buf, nleft, 0);   /* send(): sockets on all platforms (write() is CRT-only on Windows) */
 	if (r < 0) {
 	    switch (errno) {
 		case EINTR:

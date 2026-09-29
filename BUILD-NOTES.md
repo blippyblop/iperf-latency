@@ -12,6 +12,17 @@ Source tree: this repository (upstream esnet/iperf master @ c9b7422, with the
 feature added and the binary renamed from `iperf3` to `iperf-latency`).
 Prebuilt static binaries are in `bin/<arch>/iperf-latency`; `design.md` is the
 original feature spec.
+
+> **2026-09-29:** binaries are no longer committed to the repository. They were
+> removed from git tracking and `bin/` is gitignored — it only holds local build
+> output now. Release binaries (linux x86_64, linux aarch64, windows x86_64) are
+> built and attached to GitHub releases automatically by
+> `.github/workflows/release.yml` on release publish. The Linux builds there
+> reproduce the recipes below with musl (static, `--with-openssl=no`,
+> `--enable-static-bin`). The Windows attempt in that workflow is best-effort
+> (`continue-on-error`) until the source-level WIN32 gaps described below are
+> fixed. Note: the previously committed binaries predate the clock-domain
+> latency fix (commit 306d671) and are stale.
 Feature: `--measure-latency` (client-only, UDP only). NTP-style 4-timestamp clock
 sync over the TCP control channel at ~1 Hz (`CLOCK_SYNC_REQ 17` / `CLOCK_SYNC_RSP 18`,
 signed char + 2×BE64 µs), latency of real UDP data packets = transit time corrected

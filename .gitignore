@@ -31,3 +31,5 @@ examples/Makefile
 examples/mic
 examples/mis
 .vscode/
+# prebuilt release artifacts: built by CI on releases, never committed
+bin/

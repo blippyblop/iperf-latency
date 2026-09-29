@@ -861,7 +861,6 @@ Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
 
 		default:
 		errno = SOCK_ERRNO;
-		fprintf(stderr, "net.c hard error: fd=%d sock_errno=%d\n", fd, (int) SOCK_ERRNO);
 		return NET_HARDERROR;
 	    }
 	}
